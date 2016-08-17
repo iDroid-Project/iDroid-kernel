@@ -1796,12 +1796,12 @@ static int h2fmi_detect_nand(struct h2fmi_state *_state)
 	// Check for power-of-two
 	if(!(_state->geo.blocks_per_ce & (_state->geo.blocks_per_ce-1)))
 	{
-		_state->geo.bank_address_space = _state->geo.blocks_per_ce;
+		_state->geo.bank_address_space = _state->geo.blocks_per_bank;
 		_state->geo.total_block_space = _state->geo.blocks_per_ce;
 	}
 	else
 	{
-		u32 bas = roundup_pow_of_two(_state->geo.blocks_per_ce);
+		u32 bas = roundup_pow_of_two(_state->geo.blocks_per_bank);
 		_state->geo.bank_address_space = bas;
 		_state->geo.total_block_space = ((_state->geo.banks_per_ce-1)*bas)
 			+ _state->geo.blocks_per_bank;
