@@ -188,12 +188,12 @@ extern struct platform_device s5l8930_spi0;
 extern struct platform_device s5l8930_spi1;
 
 static struct platform_device *s5l8930_devices[] __initdata = {
-	//&s5l8930_spi0,
-	//&s5l8930_spi1,
-	//&s3c_device_i2c0,
-	//&s3c_device_i2c1,
-	//&s3c_device_usb_hsotg,
-	//&s3c_device_hsmmc0,
+	&s5l8930_spi0,
+	&s5l8930_spi1,
+	&s3c_device_i2c0,
+	&s3c_device_i2c1,
+	&s3c_device_usb_hsotg,
+	&s3c_device_hsmmc0,
 };
 
 static __init int s5l8930_cpu_init(void)

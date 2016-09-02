@@ -88,6 +88,7 @@ static void __init ip4_init(void)
 	s5l8930_register_gpio_keys(buttons, ARRAY_SIZE(buttons));
 	s5l8930_register_mipi_dsim(&video_mode, 2, 57, 1, 3);
 	s5l8930_register_clcd(&video_mode, 24, &clcd_info);
+	s5l8930_register_h2fmi();
 }
 
 MACHINE_START(IPHONE_4, "Apple iPhone 4")

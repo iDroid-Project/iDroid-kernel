@@ -80,6 +80,7 @@ static struct h2fmi_smth h2fmi_smth_atv2g = { { 0, 0, 0, 3, 3, 3, 4, 0 }, { 0x33
 static struct apple_vfl vfl = {
 	.max_devices = 2,
 };
+static struct apple_ftl ftl;
 
 static struct h2fmi_platform_data pdata0 = {
 	.ecc_step_shift = 10,
@@ -183,6 +184,15 @@ int s5l8930_register_h2fmi(void)
 int register_vfl(void)
 {
 	wait_for_device_probe();
-	return apple_vfl_register(&vfl, APPLE_VFL_NEW_STYLE);
+	int ret=0;
+	ret = apple_vfl_register(&vfl, APPLE_VFL_NEW_STYLE);
+	if (ret)
+		return ret;
+	ret = apple_ftl_register(&ftl,&vfl);
+	if (ret)
+			return ret;
+	//ret = iphone_block(&ftl);	//TODO
+	return ret;
 }
 late_initcall(register_vfl);
+

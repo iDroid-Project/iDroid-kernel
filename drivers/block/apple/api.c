@@ -1,6 +1,9 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/apple_flash.h>
+#include <linux/delay.h>
+#include <mach/clock.h>
+
 
 //
 // NAND
@@ -23,9 +26,8 @@ int apple_nand_special_page(struct apple_nand *_nd, u16 _ce, char _page[16],
 
 	int doAes = -1;
 	struct cdma_aes aes;
-
-	buf = kmalloc(pagesz, GFP_KERNEL);
-	oob = kmalloc(oobsz, GFP_KERNEL);
+	buf = kmalloc(pagesz, GFP_DMA32);
+	oob = kmalloc(oobsz, GFP_DMA32);
 
 	for(block = bpce-1; block >= lowestBlock; block--)
 	{
@@ -36,18 +38,29 @@ int apple_nand_special_page(struct apple_nand *_nd, u16 _ce, char _page[16],
 		for(page = 0; page < ppb; page++)
 		{
 			if(badCount > 2)
-				break;
+			{
+				printk(KERN_INFO "vfl: read_special_page - too many bad pages, skipping block %d\r\n", block);
+							break;
+						}
 
-			if((doAes = _nd->default_aes(_nd, &aes, 1)) >= 0)
+			if((doAes = _nd->default_aes(_nd, &aes, 1)) >= 0){
+				//printk(KERN_INFO "AESed\n");
 				_nd->aes(_nd, &aes);
+			}
+			//memset(buf,0,pagesz);
+
 
 			ret = apple_nand_read_page(_nd, _ce,
 					(realBlock * ppb) + page, buf, oob);
+			//printk(KERN_INFO "realBlock%x, ppb%x, page%x, fine:%x\n",realBlock,ppb,page,(realBlock * ppb) + page);
 
 			if(ret < 0)
 			{
-				if(ret != -ENOENT)
+				if(ret != -ENOENT){
+					printk(KERN_INFO "vfl: read_special_page - found 'badBlock' on ce %d, page %d\r\n", _ce, (block * ppb) + page);
 					badCount++;
+				}
+				printk(KERN_INFO "vfl: read_special_page - skipping ce %d, page %d\r\n", _ce, (block * ppb) + page);
 
 				continue;
 			}
@@ -63,9 +76,10 @@ int apple_nand_special_page(struct apple_nand *_nd, u16 _ce, char _page[16],
 					break;
 				}
 				
-				if(sp)
-					print_hex_dump(KERN_INFO, "h2fmi special-page: ", DUMP_PREFIX_OFFSET, 32,
-								   1, buf, 0x200, true);
+				//if(sp)
+					print_hex_dump(KERN_INFO, "S: ", DUMP_PREFIX_OFFSET, 16,
+								   1, buf, pagesz, true);
+				msleep(1000);
 								   }*/
 				
 			if(memcmp(buf, _page, sizeof(_page)) == 0)
@@ -125,6 +139,18 @@ int apple_nand_write_page(struct apple_nand *_nd, u16 _ce, page_t _page,
 					  &sg_oob, _oob ? 1 : 0);
 }
 EXPORT_SYMBOL_GPL(apple_nand_write_page);
+
+int nand_device_set_ftl_region(struct apple_nand *_dev, uint32_t _lpn, uint32_t _a2, uint32_t _count, void *_buf)
+{
+	if(_dev->set_ftl_region)
+	{
+		_dev->set_ftl_region(_lpn, _a2, _count, _buf);
+		return SUCCESS;
+	}
+
+	return ENOENT;
+}
+EXPORT_SYMBOL_GPL(nand_device_set_ftl_region);
 
 int apple_nand_erase_block(struct apple_nand *_nd, u16 _ce, page_t _page)
 {
@@ -191,18 +217,20 @@ int apple_vfl_special_page(struct apple_vfl *_vfl,
 }
 
 int apple_vfl_read_nand_pages(struct apple_vfl *_vfl,
-		size_t _count, u16 *_ces, page_t *_pages,
+		size_t _count, u16 _ces, page_t *_pages,
 		struct scatterlist *_sg_data, size_t _sg_num_data,
-		struct scatterlist *_sg_oob, size_t _sg_num_oob)
+		struct scatterlist *_sg_oob, size_t _sg_num_oob, uint8_t offset)
 {
-	// Check whether this is all on one bus, if so, just pass-through
+	//FIXME Check whether this is all on one bus, if so, just pass-through
 
 	int ret, ok = 1, ce, bus, i;
 
 	if(!_count)
 		return 0;
 
-	ce = _ces[0];
+	/*ce = _ces[0];
+
+
 	bus = _vfl->chips[ce].bus;
 	for(i = 1; i < _count; i++)
 	{
@@ -211,21 +239,32 @@ int apple_vfl_read_nand_pages(struct apple_vfl *_vfl,
 			ok = 0;
 			break;
 		}
-	}
+	}*/
 
 	if(ok)
 	{
 		// only one bus, pass it along!
-
+		struct apple_chip_map *chip = &_vfl->chips[_ces];
+			bus = chip->bus;
 		struct apple_nand *nand = _vfl->devices[bus];
-		u16 *chips = kmalloc(sizeof(*chips)*_count, GFP_KERNEL);
+		/*u16 *chips = kmalloc(sizeof(*chips)*_count, GFP_KERNEL);
 		if(!chips)
 			return -ENOMEM;
 
-		ret = nand->read(nand, _count, chips, _pages,
+		//struct apple_chip_map *chip = &_vfl->chips[_ces];
+		int doAes = -1;
+			struct cdma_aes aes;
+
+		//struct apple_chip_map *chip = &_vfl->chips[_ces];
+		//struct apple_nand *nand = _vfl->devices[chip->bus];*/
+
+		nand->setup_aes(nand, 1, 0, offset);
+		ret = nand->read(nand, _count, &chip->chip, _pages,
 						 _sg_data, _sg_num_data,
 						 _sg_oob, _sg_num_oob);
-		kfree(chips);
+
+
+		//kfree(chips);
 		return ret;
 	}
 	else
@@ -277,9 +316,9 @@ int apple_vfl_read_nand_pages(struct apple_vfl *_vfl,
 EXPORT_SYMBOL_GPL(apple_vfl_read_nand_pages);
 
 int apple_vfl_write_nand_pages(struct apple_vfl *_vfl,
-		size_t _count, u16 *_ces, page_t *_pages,
+		size_t _count, u16 _ces, page_t *_pages,
 		struct scatterlist *_sg_data, size_t _sg_num_data,
-		struct scatterlist *_sg_oob, size_t _sg_num_oob)
+		struct scatterlist *_sg_oob, size_t _sg_num_oob, uint8_t offset)
 {
 	// Check whether this is all on one bus, if so, just pass-through
 
@@ -288,7 +327,7 @@ int apple_vfl_write_nand_pages(struct apple_vfl *_vfl,
 	if(!_count)
 		return 0;
 
-	ce = _ces[0];
+	/*ce = _ces[0];
 	bus = _vfl->chips[ce].bus;
 	for(i = 1; i < _count; i++)
 	{
@@ -297,21 +336,25 @@ int apple_vfl_write_nand_pages(struct apple_vfl *_vfl,
 			ok = 0;
 			break;
 		}
-	}
+	}*/
 
 	if(ok)
 	{
 		// only one bus, pass it along!
 
-		struct apple_nand *nand = _vfl->devices[bus];
+		/*struct apple_nand *nand = _vfl->devices[bus];
 		u16 *chips = kmalloc(sizeof(*chips)*_count, GFP_KERNEL);
 		if(!chips)
-			return -ENOMEM;
+			return -ENOMEM;*/
+		struct apple_chip_map *chip = &_vfl->chips[_ces];
+					bus = chip->bus;
+				struct apple_nand *nand = _vfl->devices[bus];
+		nand->setup_aes(nand, 1, 1, offset);
 
-		ret = nand->write(nand, _count, chips, _pages,
+		ret = nand->write(nand, _count, &chip->chip, _pages,
 						 _sg_data, _sg_num_data,
 						 _sg_oob, _sg_num_oob);
-		kfree(chips);
+		//kfree(chips);
 		return ret;
 	}
 	else
@@ -327,9 +370,9 @@ int apple_vfl_read_nand_page(struct apple_vfl *_vfl, u16 _ce,
 	sg_init_one(&sg_buf, _data, _vfl->get(_vfl, NAND_PAGE_SIZE));
 	sg_init_one(&sg_oob, _oob, _vfl->get(_vfl, NAND_OOB_ALLOC));
 
-	return apple_vfl_read_nand_pages(_vfl, 1, &_ce, &_page,
+	return apple_vfl_read_nand_pages(_vfl, 1, _ce, &_page,
 					&sg_buf, _data ? 1 : 0,
-					&sg_oob, _oob ? 1 : 0);
+					&sg_oob, _oob ? 1 : 0, _data);
 }
 EXPORT_SYMBOL_GPL(apple_vfl_read_nand_page);
 
@@ -341,9 +384,9 @@ int apple_vfl_write_nand_page(struct apple_vfl *_vfl, u16 _ce,
 	sg_init_one(&sg_buf, _data, _vfl->get(_vfl, NAND_PAGE_SIZE));
 	sg_init_one(&sg_oob, _oob, _vfl->get(_vfl, NAND_OOB_ALLOC));
 
-	return apple_vfl_write_nand_pages(_vfl, 1, &_ce,
+	return apple_vfl_write_nand_pages(_vfl, 1, _ce,
 					&_page, &sg_buf, _data ? 1 : 0,
-					&sg_oob, _oob ? 1 : 0);
+					&sg_oob, _oob ? 1 : 0, _data);
 }
 EXPORT_SYMBOL_GPL(apple_vfl_write_nand_page);
 
@@ -390,11 +433,15 @@ void apple_vfl_init(struct apple_vfl *_vfl)
 }
 EXPORT_SYMBOL_GPL(apple_vfl_init);
 
+static struct apple_ftl ftl;
 int apple_vfl_register(struct apple_vfl *_vfl, enum apple_vfl_detection _detect)
 {
 	int i, ret;
 	u8 sigbuf[264];
 	u32 flags;
+
+	//memset(_vfl->chips, 0xFF, sizeof(h2fmi_map));
+
 	struct apple_chip_map *dc = &_vfl->chips[0];
 
 	// Setup Chip Map
@@ -404,7 +451,49 @@ int apple_vfl_register(struct apple_vfl *_vfl, enum apple_vfl_detection _detect)
 		return -ENOENT;
 	}
 	
+	printk("apple-flash: num_devices:%x !\n",_vfl->num_devices);
+
 	// This algo is wrong, fix it.
+
+	int count[_vfl->num_devices];
+
+		for (i = 0; i < _vfl->num_devices; i++) {
+			struct apple_nand *nand = _vfl->devices[i];
+			int countx = apple_nand_get(nand, NAND_NUM_CE);
+			count[i] = countx * i;
+		}
+
+		u16 total = 0;
+		int bus;
+		for(bus = 0; bus < _vfl->num_devices; bus++){
+			struct apple_nand *nand = _vfl->devices[bus];
+			int countx = apple_nand_get(nand, NAND_NUM_CE);
+			total += countx;
+		}
+		_vfl->num_chips += total;
+		int chip = 0;
+		for(chip = 0; chip < total;)
+		{
+			for(bus = 0; bus < _vfl->num_devices; bus++)
+			{
+				struct apple_nand *nand = _vfl->devices[bus];
+				int bmap = apple_nand_get(nand, NAND_BITMAP);
+				//printk("bmap :%x\n",bmap);
+
+				if((bus == 0 ? bmap : bmap*100) & (1 << count[bus]))
+				{
+					struct apple_chip_map *e = &_vfl->chips[chip];
+					e->bus = bus;
+					e->chip = (count[bus] > 1 ? count[bus]-2 : count[bus]);
+					printk("chip :%x,bus: %x \n",e->chip,bus);
+
+					chip++;
+				}
+
+				count[bus]++;
+			}
+		}
+/*
 	for(i = 0; i < _vfl->num_devices; i++)
 	{
 		struct apple_nand *nand = _vfl->devices[i];
@@ -412,6 +501,7 @@ int apple_vfl_register(struct apple_vfl *_vfl, enum apple_vfl_detection _detect)
 		int bmap = apple_nand_get(nand, NAND_BITMAP);
 		int j;
 		u16 idx = 0;
+		printk("apple-flash: count :%x num_chips:%x !\n",count,_vfl->num_chips);
 
 		for(j = 0; j < count; j++)
 		{
@@ -428,11 +518,13 @@ int apple_vfl_register(struct apple_vfl *_vfl, enum apple_vfl_detection _detect)
 
 			map->bus = i;
 			map->chip = idx;
+			printk("chip :%x,bus :%x CHIP:%x \n",idx,i,j+_vfl->num_chips);
+
 		}
 
 		_vfl->num_chips += count;
 	}
-
+*/
 	printk(KERN_INFO "%s: detecting VFL on (%d, %u)...\n", __func__, dc->bus, dc->chip);
 
 	// Detect VFL type
@@ -504,6 +596,9 @@ int apple_vfl_register(struct apple_vfl *_vfl, enum apple_vfl_detection _detect)
 		printk(KERN_ERR "apple-flash: failed to detect VFL.\n");
 		return ret;
 	}
+	//ret = apple_ftl_register(&ftl,_vfl);
+	if (ret)
+			return  ret;
 
 	return 0;
 }
@@ -519,6 +614,171 @@ EXPORT_SYMBOL_GPL(apple_vfl_unregister);
 //
 // FTL
 //
+
+
+static int ftl_read_mtd(struct apple_ftl *ftl, void *_dest, uint64_t _off, int _amt)
+{
+	uint8_t* curLoc = (uint8_t*) _dest;
+	uint32_t block_size = ftl->block_size;
+	int curPage = _off / block_size;
+	int toRead = _amt;
+	int pageOffset = _off - (curPage * block_size);
+	uint8_t* tBuffer = (uint8_t*) kmalloc(block_size, GFP_KERNEL);
+	int ret = SUCCESS;
+
+	while(toRead > 0)
+    {
+		size_t this_amt = toRead;
+		if(this_amt > (block_size-pageOffset))
+			this_amt = block_size-pageOffset;
+
+		ret = ftl_read_single_page(ftl, curPage, tBuffer);
+		if(FAILED(ret))
+			break;
+
+		memcpy(curLoc, tBuffer + pageOffset, this_amt);
+
+		curLoc += this_amt;
+		toRead -= this_amt;
+		pageOffset = 0;
+		curPage++;
+	}
+
+	if(!FAILED(ret))
+		ret = _amt;
+
+	kfree(tBuffer);
+	return ret;
+}
+
+static int ftl_write_mtd(struct apple_ftl *ftl, void *_src, uint64_t _off, int _amt)
+{
+	uint8_t* curLoc = (uint8_t*) _src;
+	uint32_t block_size = ftl->block_size;
+	int curPage = _off / block_size;
+	int toWrite = _amt;
+	int pageOffset = _off - (curPage * block_size);
+
+	int ret = SUCCESS;
+	uint8_t* tBuffer = (uint8_t*) kmalloc(block_size, GFP_KERNEL);
+
+	while(toWrite > 0)
+	{
+		size_t this_amt = toWrite;
+		if(this_amt > (block_size-pageOffset))
+			this_amt = block_size-pageOffset;
+
+		memset(tBuffer, 0, block_size);
+		ret = ftl_read_single_page(ftl, curPage, tBuffer);
+		if(FAILED(ret))
+			break;
+
+		memcpy(tBuffer + pageOffset, curLoc, this_amt);
+
+		ret = ftl_write_single_page(ftl, curPage, tBuffer);
+		if(FAILED(ret))
+			break;
+
+		curLoc += this_amt;
+		toWrite -= this_amt;
+		pageOffset = 0;
+		curPage++;
+	}
+
+	if(!FAILED(ret))
+		ret = _amt;
+
+	kfree(tBuffer);
+	return ret;
+}
+
+
+static int64_t ftl_block_size(struct apple_ftl *_dev)
+{
+	return _dev->block_size;
+}
+
+static int ftl_prepare(struct apple_ftl *_dev)
+{
+	//apple_ftl *dev = CONTAINER_OF(apple_ftl, mtd, _dev);
+	return SUCCESS;
+}
+int ftl_init(struct apple_ftl *_dev)
+{
+	//_dev->open = FALSE;
+
+	/*memcpy(&_dev->mtd, &ftl_mtd, sizeof(ftl_mtd));
+	int ret = mtd_init(&_dev->mtd);
+	if(FAILED(ret))
+		return ret;
+*/
+	return SUCCESS;
+}
+
+void ftl_cleanup(struct apple_ftl *_dev)
+{
+	//mtd_cleanup(&_dev->mtd);
+}
+
+int ftl_register(struct apple_ftl *_dev)
+{
+	/*int ret = mtd_register(&_dev->mtd);
+	if(FAILED(ret))
+		return ret;
+*/
+	return SUCCESS;
+}
+
+void ftl_unregister(struct apple_ftl *_dev)
+{
+	//mtd_unregister(&_dev->mtd);
+}
+
+int ftl_read_single_page(struct apple_ftl *_dev, page_t _page, uint8_t *_buffer)
+{
+	if(_dev->read_single_page)
+		return _dev->read_single_page(_dev, _page, _buffer);
+
+	return ENOENT;
+}
+
+int ftl_write_single_page(struct apple_ftl *_dev, page_t _page, uint8_t *_buffer)
+{
+	if(_dev->write_single_page)
+		return _dev->write_single_page(_dev, _page, _buffer);
+
+	return ENOENT;
+}
+
+int apple_ftl_register(struct apple_ftl *_dev,struct apple_vfl *_vfl)
+{
+
+	int ret = ftl_detect(&_dev,_vfl);
+
+	if(ret < 0)
+	{
+		printk(KERN_ERR "apple-flash: failed to detect FTL.\n");
+		return ret;
+	}
+
+	return SUCCESS;
+}
+EXPORT_SYMBOL_GPL(apple_ftl_register);
+
+int iphone_block(struct apple_ftl *_dev)
+{
+
+	int ret = iphone_block_probe(_dev);
+
+	if(ret < 0)
+	{
+		printk(KERN_ERR "apple-flash: Block_dev failed.\n");
+		return ret;
+	}
+
+	return SUCCESS;
+}
+EXPORT_SYMBOL_GPL(iphone_block);
 
 MODULE_AUTHOR("Ricky Taylor <rickytaylor26@gmail.com>");
 MODULE_DESCRIPTION("API for Apple Mobile Device NAND.");
