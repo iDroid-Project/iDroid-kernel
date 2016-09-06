@@ -41,8 +41,10 @@ int cdma_begin(u32 _channel, cdma_dir_t _dir, struct scatterlist *_sg, size_t _s
 int cdma_cancel(u32 _channel);
 
 int cdma_wait(u32 _channel);
+int cdma_wait_timeout(u32 _channel,int timeout);
 
 int cdma_aes(u32 _channel, struct cdma_aes *_aes);
+int aes_crypto_cmd(uint32_t _encrypt, void *_inBuf, void *_outBuf, uint32_t _size, uint32_t _type, void *_key, void *_iv);
 
 #endif //__S5L_CDMA__
 

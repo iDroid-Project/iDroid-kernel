@@ -20,7 +20,6 @@
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
 #include <linux/apple_flash.h>
-#include <linux/tim.h>
 #include <plat/h2fmi.h>
 #include <plat/cdma.h>
 #include <mach/clock.h>
