@@ -283,6 +283,8 @@ enum rtattr_type_t {
 	RTA_MP_ALGO, /* no longer used */
 	RTA_TABLE,
 	RTA_MARK,
+	RTA_MFC_STATS, /* not used - backported from the future */
+	RTA_UID,
 	__RTA_MAX
 };
 
@@ -599,6 +601,9 @@ struct tcamsg {
 #define TA_PAYLOAD(n) NLMSG_PAYLOAD(n,sizeof(struct tcamsg))
 #define TCA_ACT_TAB 1 /* attr type must be >=1 */	
 #define TCAA_MAX 1
+
+/* New extended info filters for IFLA_EXT_MASK */
+#define RTEXT_FILTER_VF		(1 << 0)
 
 /* End of information exported to user level */
 

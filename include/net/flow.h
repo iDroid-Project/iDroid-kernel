@@ -7,6 +7,7 @@
 #ifndef _NET_FLOW_H
 #define _NET_FLOW_H
 
+#include <linux/socket.h>
 #include <linux/in6.h>
 #include <asm/atomic.h>
 
@@ -22,6 +23,7 @@ struct flowi_common {
 #define FLOWI_FLAG_PRECOW_METRICS	0x02
 #define FLOWI_FLAG_CAN_SLEEP		0x04
 	__u32	flowic_secid;
+	uid_t	flowic_uid;
 };
 
 union flowi_uli {
@@ -58,8 +60,12 @@ struct flowi4 {
 #define flowi4_proto		__fl_common.flowic_proto
 #define flowi4_flags		__fl_common.flowic_flags
 #define flowi4_secid		__fl_common.flowic_secid
-	__be32			daddr;
+#define flowi4_uid		__fl_common.flowic_uid
+
+	/* (saddr,daddr) must be grouped, same order as in IP header */
 	__be32			saddr;
+	__be32			daddr;
+
 	union flowi_uli		uli;
 #define fl4_sport		uli.ports.sport
 #define fl4_dport		uli.ports.dport
@@ -68,13 +74,14 @@ struct flowi4 {
 #define fl4_ipsec_spi		uli.spi
 #define fl4_mh_type		uli.mht.type
 #define fl4_gre_key		uli.gre_key
-};
+} __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 static inline void flowi4_init_output(struct flowi4 *fl4, int oif,
 				      __u32 mark, __u8 tos, __u8 scope,
 				      __u8 proto, __u8 flags,
 				      __be32 daddr, __be32 saddr,
-				      __be16 dport, __be32 sport)
+				      __be16 dport, __be32 sport,
+				      uid_t uid)
 {
 	fl4->flowi4_oif = oif;
 	fl4->flowi4_iif = 0;
@@ -84,10 +91,21 @@ static inline void flowi4_init_output(struct flowi4 *fl4, int oif,
 	fl4->flowi4_proto = proto;
 	fl4->flowi4_flags = flags;
 	fl4->flowi4_secid = 0;
+	fl4->flowi4_uid = uid;
 	fl4->daddr = daddr;
 	fl4->saddr = saddr;
 	fl4->fl4_dport = dport;
 	fl4->fl4_sport = sport;
+}
+
+/* Reset some input parameters after previous lookup */
+static inline void flowi4_update_output(struct flowi4 *fl4, int oif, __u8 tos,
+					__be32 daddr, __be32 saddr)
+{
+	fl4->flowi4_oif = oif;
+	fl4->flowi4_tos = tos;
+	fl4->daddr = daddr;
+	fl4->saddr = saddr;
 }
 				      
 
@@ -101,6 +119,7 @@ struct flowi6 {
 #define flowi6_proto		__fl_common.flowic_proto
 #define flowi6_flags		__fl_common.flowic_flags
 #define flowi6_secid		__fl_common.flowic_secid
+#define flowi6_uid		__fl_common.flowic_uid
 	struct in6_addr		daddr;
 	struct in6_addr		saddr;
 	__be32			flowlabel;
@@ -112,7 +131,7 @@ struct flowi6 {
 #define fl6_ipsec_spi		uli.spi
 #define fl6_mh_type		uli.mht.type
 #define fl6_gre_key		uli.gre_key
-};
+} __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 struct flowidn {
 	struct flowi_common	__fl_common;
@@ -127,7 +146,7 @@ struct flowidn {
 	union flowi_uli		uli;
 #define fld_sport		uli.ports.sport
 #define fld_dport		uli.ports.dport
-};
+} __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 struct flowi {
 	union {
@@ -144,6 +163,7 @@ struct flowi {
 #define flowi_proto	u.__fl_common.flowic_proto
 #define flowi_flags	u.__fl_common.flowic_flags
 #define flowi_secid	u.__fl_common.flowic_secid
+#define flowi_uid	u.__fl_common.flowic_uid
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 static inline struct flowi *flowi4_to_flowi(struct flowi4 *fl4)
@@ -159,6 +179,24 @@ static inline struct flowi *flowi6_to_flowi(struct flowi6 *fl6)
 static inline struct flowi *flowidn_to_flowi(struct flowidn *fldn)
 {
 	return container_of(fldn, struct flowi, u.dn);
+}
+
+typedef unsigned long flow_compare_t;
+
+static inline size_t flow_key_size(u16 family)
+{
+	switch (family) {
+	case AF_INET:
+		BUILD_BUG_ON(sizeof(struct flowi4) % sizeof(flow_compare_t));
+		return sizeof(struct flowi4) / sizeof(flow_compare_t);
+	case AF_INET6:
+		BUILD_BUG_ON(sizeof(struct flowi6) % sizeof(flow_compare_t));
+		return sizeof(struct flowi6) / sizeof(flow_compare_t);
+	case AF_DECnet:
+		BUILD_BUG_ON(sizeof(struct flowidn) % sizeof(flow_compare_t));
+		return sizeof(struct flowidn) / sizeof(flow_compare_t);
+	}
+	return 0;
 }
 
 #define FLOW_DIR_IN	0

@@ -161,7 +161,7 @@ int ip_build_and_send_pkt(struct sk_buff *skb, struct sock *sk,
 	iph->daddr    = (opt && opt->opt.srr ? opt->opt.faddr : daddr);
 	iph->saddr    = saddr;
 	iph->protocol = sk->sk_protocol;
-	ip_select_ident(iph, &rt->dst, sk);
+	ip_select_ident(skb, &rt->dst, sk);
 
 	if (opt && opt->opt.optlen) {
 		iph->ihl += opt->opt.optlen>>2;
@@ -182,6 +182,8 @@ static inline int ip_finish_output2(struct sk_buff *skb)
 	struct rtable *rt = (struct rtable *)dst;
 	struct net_device *dev = dst->dev;
 	unsigned int hh_len = LL_RESERVED_SPACE(dev);
+	struct neighbour *neigh;
+	int res;
 
 	if (rt->rt_type == RTN_MULTICAST) {
 		IP_UPD_PO_STATS(dev_net(dev), IPSTATS_MIB_OUTMCAST, skb->len);
@@ -203,10 +205,22 @@ static inline int ip_finish_output2(struct sk_buff *skb)
 		skb = skb2;
 	}
 
-	if (dst->hh)
-		return neigh_hh_output(dst->hh, skb);
-	else if (dst->neighbour)
-		return dst->neighbour->output(skb);
+	rcu_read_lock();
+	if (dst->hh) {
+		int res = neigh_hh_output(dst->hh, skb);
+
+		rcu_read_unlock();
+		return res;
+	} else {
+		neigh = dst_get_neighbour(dst);
+		if (neigh) {
+			res = neigh->output(skb);
+
+			rcu_read_unlock();
+			return res;
+		}
+		rcu_read_unlock();
+	}
 
 	if (net_ratelimit())
 		printk(KERN_DEBUG "ip_finish_output2: No header cache and no neighbour!\n");
@@ -312,6 +326,20 @@ int ip_output(struct sk_buff *skb)
 			    !(IPCB(skb)->flags & IPSKB_REROUTED));
 }
 
+/*
+ * copy saddr and daddr, possibly using 64bit load/stores
+ * Equivalent to :
+ *   iph->saddr = fl4->saddr;
+ *   iph->daddr = fl4->daddr;
+ */
+static void ip_copy_addrs(struct iphdr *iph, const struct flowi4 *fl4)
+{
+	BUILD_BUG_ON(offsetof(typeof(*fl4), daddr) !=
+		     offsetof(typeof(*fl4), saddr) + sizeof(fl4->saddr));
+	memcpy(&iph->saddr, &fl4->saddr,
+	       sizeof(fl4->saddr) + sizeof(fl4->daddr));
+}
+
 int ip_queue_xmit(struct sk_buff *skb, struct flowi *fl)
 {
 	struct sock *sk = skb->sk;
@@ -374,8 +402,8 @@ packet_routed:
 		iph->frag_off = 0;
 	iph->ttl      = ip_select_ttl(inet, &rt->dst);
 	iph->protocol = sk->sk_protocol;
-	iph->saddr    = fl4->saddr;
-	iph->daddr    = fl4->daddr;
+	ip_copy_addrs(iph, fl4);
+
 	/* Transport layer set skb->h.foo itself. */
 
 	if (inet_opt && inet_opt->opt.optlen) {
@@ -383,7 +411,7 @@ packet_routed:
 		ip_options_build(skb, &inet_opt->opt, inet->inet_daddr, rt, 0);
 	}
 
-	ip_select_ident_more(iph, &rt->dst, sk,
+	ip_select_ident_more(skb, &rt->dst, sk,
 			     (skb_shinfo(skb)->gso_segs ?: 1) - 1);
 
 	skb->priority = sk->sk_priority;
@@ -1326,11 +1354,10 @@ struct sk_buff *__ip_make_skb(struct sock *sk,
 	iph->ihl = 5;
 	iph->tos = inet->tos;
 	iph->frag_off = df;
-	ip_select_ident(iph, &rt->dst, sk);
+	ip_select_ident(skb, &rt->dst, sk);
 	iph->ttl = ttl;
 	iph->protocol = sk->sk_protocol;
-	iph->saddr = fl4->saddr;
-	iph->daddr = fl4->daddr;
+	ip_copy_addrs(iph, fl4);
 
 	if (opt) {
 		iph->ihl += opt->optlen>>2;
@@ -1458,7 +1485,7 @@ static int ip_reply_glue_bits(void *dptr, char *to, int offset,
  *     	structure to pass arguments.
  */
 void ip_send_reply(struct sock *sk, struct sk_buff *skb, __be32 daddr,
-		   struct ip_reply_arg *arg, unsigned int len)
+		   const struct ip_reply_arg *arg, unsigned int len)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct ip_options_data replyopts;
@@ -1481,11 +1508,12 @@ void ip_send_reply(struct sock *sk, struct sk_buff *skb, __be32 daddr,
 	}
 
 	flowi4_init_output(&fl4, arg->bound_dev_if, 0,
-			   RT_TOS(ip_hdr(skb)->tos),
+			   RT_TOS(arg->tos),
 			   RT_SCOPE_UNIVERSE, sk->sk_protocol,
 			   ip_reply_arg_flowi_flags(arg),
 			   daddr, rt->rt_spec_dst,
-			   tcp_hdr(skb)->source, tcp_hdr(skb)->dest);
+			   tcp_hdr(skb)->source, tcp_hdr(skb)->dest,
+			   arg->uid);
 	security_skb_classify_flow(skb, flowi4_to_flowi(&fl4));
 	rt = ip_route_output_key(sock_net(sk), &fl4);
 	if (IS_ERR(rt))
@@ -1498,7 +1526,7 @@ void ip_send_reply(struct sock *sk, struct sk_buff *skb, __be32 daddr,
 	   with locally disabled BH and that sk cannot be already spinlocked.
 	 */
 	bh_lock_sock(sk);
-	inet->tos = ip_hdr(skb)->tos;
+	inet->tos = arg->tos;
 	sk->sk_priority = skb->priority;
 	sk->sk_protocol = ip_hdr(skb)->protocol;
 	sk->sk_bound_dev_if = arg->bound_dev_if;

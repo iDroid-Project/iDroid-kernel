@@ -376,7 +376,7 @@ config USB_S3C_HSUDC
 
 config USB_GADGET_S3C_OTGD
 	boolean "S3C HS USB OTG Device"
-	depends on (ARCH_S5PV210) && !(USB_S3C_OTG_HOST)
+	depends on (ARCH_S5PV210)
 	help
 	  Samsung's S3C64XX processors include high speed USB OTG2.0
 	  controller. It has 15 configurable endpoints, as well as
@@ -559,7 +559,7 @@ config USB_LANGWELL
 	select USB_GADGET_SELECTED
 
 config USB_GADGET_EG20T
-	boolean "Intel EG20T PCH/OKI SEMICONDUCTOR ML7213 IOH UDC"
+	tristate "Intel EG20T PCH/OKI SEMICONDUCTOR IOH(ML7213/ML7831) UDC"
 	depends on PCI
 	select USB_GADGET_DUALSPEED
 	help
@@ -577,8 +577,9 @@ config USB_GADGET_EG20T
 
 	  This driver also can be used for OKI SEMICONDUCTOR's ML7213 which is
 	  for IVI(In-Vehicle Infotainment) use.
-	  ML7213 is companion chip for Intel Atom E6xx series.
-	  ML7213 is completely compatible for Intel EG20T PCH.
+	  ML7831 is for general purpose use.
+	  ML7213/ML7831 is companion chip for Intel Atom E6xx series.
+	  ML7213/ML7831 is completely compatible for Intel EG20T PCH.
 
 config USB_EG20T
 	tristate
@@ -652,7 +653,7 @@ comment "NOTE: S3C OTG device role enables the controller driver below"
 
 config USB_S3C_OTGD
 	tristate "S3C high speed(2.0, dual-speed) USB OTG device"
-	depends on USB_GADGET && USB_GADGET_S3C_OTGD && !(USB_S3C_OTG_HOST)
+	depends on USB_GADGET && USB_GADGET_S3C_OTGD
 	default y
 	default USB_GADGET
 	select USB_GADGET_SELECTED

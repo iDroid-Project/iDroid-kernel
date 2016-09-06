@@ -48,6 +48,17 @@ static struct wake_lock rfkill_wake_lock;
 
 static struct rfkill *bt_rfk;
 static const char bt_name[] = "bcm4329";
+static bool current_blocked = true;
+
+#ifdef CONFIG_CPU_DIDLE
+static bool bt_running = false;
+
+bool bt_is_running(void)
+{
+    return bt_running;
+}
+EXPORT_SYMBOL(bt_is_running);
+#endif
 
 static int bluetooth_set_power(void *data, enum rfkill_user_states state)
 {
@@ -118,6 +129,10 @@ static int bluetooth_set_power(void *data, enum rfkill_user_states state)
 	case RFKILL_USER_STATE_SOFT_BLOCKED:
 		pr_debug("[BT] Device Powering OFF\n");
 
+#ifdef CONFIG_CPU_DIDLE
+		bt_running = false;
+#endif
+
 		ret = disable_irq_wake(irq);
 		if (ret < 0)
 			pr_err("[BT] unset wakeup src failed\n");
@@ -159,6 +174,10 @@ irqreturn_t bt_host_wake_irq_handler(int irq, void *dev_id)
 {
 	pr_debug("[BT] bt_host_wake_irq_handler start\n");
 
+#ifdef CONFIG_CPU_DIDLE
+	bt_running = true;
+#endif
+
 	if (gpio_get_value(GPIO_BT_HOST_WAKE))
 		wake_lock(&rfkill_wake_lock);
 	else
@@ -171,6 +190,13 @@ static int bt_rfkill_set_block(void *data, bool blocked)
 {
 	unsigned int ret = 0;
 
+	if (current_blocked == blocked) {
+		pr_debug("[BT] keeping current blocked state %d\n", blocked);
+		return ret;
+	}
+
+	current_blocked = blocked;
+
 	ret = bluetooth_set_power(data, blocked ?
 			RFKILL_USER_STATE_SOFT_BLOCKED :
 			RFKILL_USER_STATE_UNBLOCKED);
@@ -182,7 +208,7 @@ static const struct rfkill_ops bt_rfkill_ops = {
 	.set_block = bt_rfkill_set_block,
 };
 
-static int __init herring_rfkill_probe(struct platform_device *pdev)
+static int __devinit herring_rfkill_probe(struct platform_device *pdev)
 {
 	int irq;
 	int ret;
@@ -236,7 +262,7 @@ static int __init herring_rfkill_probe(struct platform_device *pdev)
 	}
 
 	rfkill_set_sw_state(bt_rfk, 1);
-	bluetooth_set_power(NULL, RFKILL_USER_STATE_SOFT_BLOCKED);
+	bt_rfkill_set_block(NULL, true);
 
 	return ret;
 
@@ -256,7 +282,7 @@ static int __init herring_rfkill_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static struct platform_driver herring_device_rfkill = {
+static struct platform_driver herring_rfkill_driver = {
 	.probe = herring_rfkill_probe,
 	.driver = {
 		.name = "bt_rfkill",
@@ -267,7 +293,7 @@ static struct platform_driver herring_device_rfkill = {
 static int __init herring_rfkill_init(void)
 {
 	int rc = 0;
-	rc = platform_driver_register(&herring_device_rfkill);
+	rc = platform_driver_register(&herring_rfkill_driver);
 
 	return rc;
 }
