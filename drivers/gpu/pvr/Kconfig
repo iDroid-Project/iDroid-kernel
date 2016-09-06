@@ -1,6 +1,6 @@
 config PVR_SGX
 	tristate "PowerVR SGX support"
-	depends on ARCH_S5PV210
+	depends on ARCH_S5PV210 || ARCH_S5L
 	help
 	  Enable this option to build support for the PowerVR SGX 3D core.
 

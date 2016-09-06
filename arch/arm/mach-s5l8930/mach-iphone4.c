@@ -61,19 +61,19 @@ static struct gpio_keys_button buttons[] = {
 		.gpio = S5L8930_GPIO(0x7),
 		.desc = "Home",
 	},
-	[1] = {
+	/*[3] = {
 		.type = EV_KEY,
 		.code = KEY_ESC,
 		.gpio = S5L8930_GPIO(0x1),
 		.desc = "Hold",
-	},
-	[2] = {
+	},*/
+	[1] = {
 		.type = EV_KEY,
 		.code = KEY_VOLUMEUP,
 		.gpio = S5L8930_GPIO(0x2),
 		.desc = "Volume Up",
 	},
-	[3] = {
+	[2] = {
 		.type = EV_KEY,
 		.code = KEY_VOLUMEDOWN,
 		.gpio = S5L8930_GPIO(0x3),

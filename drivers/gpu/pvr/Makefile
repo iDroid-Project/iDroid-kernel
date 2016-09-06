@@ -126,6 +126,20 @@ pvrsrvkm-$(CONFIG_ARCH_S5PV210) += \
 	s5pc110/sysconfig.o \
 	s5pc110/sysutils.o
 
+ccflags-$(CONFIG_PLAT_S5L) += \
+	-DPVR_BUILD_DIR="\"smdkc110_android\"" \
+	-Idrivers/gpu/pvr/s5l \
+	-DDISPLAY_CONTROLLER=s5l_clcd \
+    -DSLSI_S5L
+
+ccflags-$(CONFIG_PLAT_S5L) += \
+	-DSGX535 -DSUPPORT_SGX535 \
+	-DSGX_CORE_REV=120
+
+pvrsrvkm-$(CONFIG_PLAT_S5L) += \
+	s5l/sysconfig.o \
+	s5l/sysutils.o
+
 s3c_lcd-y := \
 	s3c_lcd/s3c_displayclass.o \
 	s3c_lcd/s3c_lcd.o
