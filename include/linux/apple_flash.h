@@ -7,6 +7,26 @@
 
 typedef uint32_t page_t;
 
+
+typedef int error_t;
+#define FAILED(x) ((x) < 0)
+#define SUCCEEDED(x) ((x) >= 0)
+#define SUCCESS 0
+#define ERROR(x) (-(x))
+#define CEIL_DIVIDE(x, y) (((x)+(y)-1)/(y))
+#define CONTAINER_OF(type, member, ptr) ((type*)(((char*)(ptr)) - ((char*)(&((type*)NULL)->member))))
+//#define ARRAY_SIZE(arr) (sizeof(arr)/sizeof((arr)[0]))
+#define ROUND_UP(val, amt) (((val + amt - 1) / amt) * amt)
+
+#ifndef MIN
+#define MIN(a, b) (((a) < (b))? (a): (b))
+#endif
+
+#ifndef MAX
+#define MAX(a, b) (((a) > (b))? (a): (b))
+#endif
+
+
 enum apple_nand_info
 {
 	NAND_NUM_CE,
@@ -18,6 +38,7 @@ enum apple_nand_info
 	NAND_ECC_STEPS,
 	NAND_ECC_BITS,
 	NAND_BYTES_PER_SPARE,
+	NAND_TOTAL_BANKS_VFL,
 	NAND_BANKS_PER_CE_VFL,
 	NAND_BANKS_PER_CE,
 	NAND_BLOCKS_PER_BANK,
@@ -32,6 +53,8 @@ enum apple_nand_info
 	VFL_PAGES_PER_BLOCK,
 	VFL_USABLE_BLOCKS_PER_BANK,
 	VFL_FTL_TYPE,
+	VFL_VENDOR_TYPE,
+
 };
 
 enum apple_vfl_detection
@@ -58,6 +81,7 @@ struct apple_nand
 
 	int (*default_aes)(struct apple_nand *, struct cdma_aes *, int _decrypt);
 	int (*aes)(struct apple_nand *, struct cdma_aes *);
+	void (*setup_aes) (struct h2fmi_state *_state, int _enabled, int _encrypt, int _offset);
 
 	int (*read)(struct apple_nand *, size_t _count,
 		u16 *_chips, page_t *_pages,
@@ -77,6 +101,9 @@ struct apple_nand
 
 	int (*is_bad)(struct apple_nand*, u16 _ce, page_t _page);
 	void (*set_bad)(struct apple_nand*, u16 _ce, page_t _page);
+	void (*set_ftl_region) (uint32_t _lpn, uint32_t _a2, uint32_t _count, void* _buf);
+	void (*h2fmi_set_emf) (uint32_t enable, uint32_t iv_input);
+	int (*h2fmi_get_emf) ();
 };
 
 static inline int apple_nand_get(struct apple_nand *_nd, int _id)
@@ -131,6 +158,16 @@ struct apple_vfl
 
 	int (*get)(struct apple_vfl *, int _info);
 	int (*set)(struct apple_vfl *, int _info, int _val);
+
+
+	void* (*get_stats) (struct apple_vfl *_vfl, uint32_t *size);
+	struct apple_nand* (*get_device) (struct apple_vfl *_vfl, int num);
+	error_t (*read_single_page) (struct apple_vfl *_vfl, uint32_t dwVpn, uint8_t* buffer, uint8_t* spare, int empty_ok, int* refresh_page);
+	error_t (*write_single_page) (struct apple_vfl *_vfl, uint32_t dwVpn, uint8_t* buffer, uint8_t* spare, int _scrub);
+	error_t (*erase_single_block) (struct apple_vfl *_vfl, uint32_t _vbn, int _replaceBadBlock);
+	error_t (*write_context) (struct apple_vfl *_vfl, uint16_t *_control_block);
+	uint16_t* (*get_ftl_ctrl_block) (struct apple_vfl *_vfl);
+
 };
 
 extern void apple_vfl_init(struct apple_vfl*);
@@ -140,13 +177,13 @@ extern void apple_vfl_unregister(struct apple_vfl*);
 extern int apple_vfl_special_page(struct apple_vfl*, u16 _ce, char _page[16],
 		uint8_t* _buffer, size_t _amt);
 extern int apple_vfl_read_nand_pages(struct apple_vfl*,
-		size_t _count, u16 *_ces, page_t *_pages,
+		size_t _count, u16 _ces, page_t *_pages,
 		struct scatterlist *_sg_data, size_t _sg_num_data,
-		struct scatterlist *_sg_oob, size_t _sg_num_oob);
+		struct scatterlist *_sg_oob, size_t _sg_num_oob, uint8_t offset);
 extern int apple_vfl_write_nand_pages(struct apple_vfl*,
-		size_t _count, u16 *_ces, page_t *_pages,
+		size_t _count, u16 _ces, page_t *_pages,
 		struct scatterlist *_sg_data, size_t _sg_num_data,
-		struct scatterlist *_sg_oob, size_t _sg_num_oob);
+		struct scatterlist *_sg_oob, size_t _sg_num_oob, uint8_t offset);
 extern int apple_vfl_read_nand_page(struct apple_vfl*, u16 _ce,
 		page_t _page, uint8_t *_data, uint8_t *_oob);
 extern int apple_vfl_write_nand_page(struct apple_vfl*, u16 _ce,
@@ -177,19 +214,62 @@ static inline int apple_vfl_set(struct apple_vfl *_nd, int _id, int _val)
 	return _nd->set(_nd, _id, _val);
 }
 
+/**
+ *  FTL Device Functions
+ *
+ *  @ingroup FTL
+ */
+
 struct apple_ftl
 {
 	struct apple_vfl *vfl;
 	void *private;
 
-	int (*read)(struct apple_ftl *, size_t _count, page_t *_pages,
-		struct scatterlist *_sg_data, size_t _sg_num_data);
+	size_t block_size;
 
-	int (*write)(struct apple_ftl *, size_t _count, page_t *_pages,
-		struct scatterlist *_sg_data, size_t _sg_num_data);
+	int (*open)(struct apple_ftl *, struct apple_vfl *_vfl);
+	void (*close)(struct apple_ftl *);
+
+	int (*read_single_page)(struct apple_ftl *, uint32_t _page, uint8_t *_buffer);
+	int (*write_single_page)(struct apple_ftl *, uint32_t _page, uint8_t *_buffer);
+
+	int (*read)(page_t _page, int nPages, uint8_t *_buffer);
+
+	int (*write)(page_t _page, int nPages, uint8_t *_buffer);
+	void (*flush)();
 
 	int (*get)(struct apple_ftl *, int _info);
 	int (*set)(struct apple_ftl *, int _info, int _val);
+
 };
+
+extern int ftl_init(struct apple_ftl *_dev);
+extern void ftl_cleanup(struct apple_ftl *_dev);
+
+extern int ftl_register(struct apple_ftl *_dev);
+extern void ftl_unregister(struct apple_ftl *_dev);
+
+extern int ftl_open(struct apple_ftl *_dev,struct apple_vfl *_vfl);
+extern void ftl_close(struct apple_ftl *_dev);
+
+extern int ftl_read_single_page(struct apple_ftl *_dev, page_t _page, uint8_t *_buffer);
+extern int ftl_write_single_page(struct apple_ftl *_dev, page_t _page, uint8_t *_buffer);
+
+extern int ftl_detect(struct apple_ftl *_dev, struct apple_vfl *_vfl);
+extern int apple_ftl_register(struct apple_ftl *_dev,struct apple_vfl *_vfl);
+
+extern void YAFTL_Flush();
+extern int ftl_yaftl_read_page(page_t _page, int nPages, uint8_t *_buffer);
+extern int ftl_yaftl_write_page(page_t _page, int nPages, uint8_t *_buffer);
+/*
+extern error_t (*ftl_device_open_t)(struct apple_ftl *,struct  apple_vfl *_vfl);
+extern void (*ftl_device_close_t)(struct apple_ftl *);
+
+extern error_t (*ftl_read_single_page_t)(struct apple_ftl *, uint32_t _page, uint8_t *_buffer);
+extern error_t (*ftl_write_single_page_t)(struct apple_ftl *, uint32_t _page, uint8_t *_buffer);
+*/
+
+extern int iphone_block_probe(struct apple_ftl *_dev);
+extern int iphone_block(struct apple_ftl *_dev);
 
 #endif //_LINUX_APPLE_FLASH_H
