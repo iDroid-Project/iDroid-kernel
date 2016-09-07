@@ -684,6 +684,7 @@ config ARCH_SA1100
 
 config ARCH_S5L
 	bool "Samsung S5L"
+	select ARCH_HAS_CPUFREQ
 	help
 	  Support for Samsung S5LXXXX chips.
 

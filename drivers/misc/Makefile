@@ -61,3 +61,5 @@ obj-$(CONFIG_CPU_DIDLE)		+= deep_idle.o
 obj-y				+= touchkey.o
 obj-$(CONFIG_IPHONE_3G_VIBRATOR)	+= iphone3g-vibrator.o
 obj-$(CONFIG_SENSORS_LIS331DL)  += lis331dl.o
+obj-$(CONFIG_GPS_GPIO_BRCM4750)	+= gps-gpio-brcm4750.o
+

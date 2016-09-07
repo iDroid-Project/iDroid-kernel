@@ -38,9 +38,9 @@
 #include <linux/cpufreq.h>
 
 #define REAL_HARDWARE 1
-#define SGX540_BASEADDR 0xf3000000
+#define SGX535_BASEADDR 0xf3000000
 #define MAPPING_SIZE 0x10000
-#define SGX540_IRQ IRQ_3D
+#define SGX535_IRQ IRQ_3D
 
 #define SYS_SGX_CLOCK_SPEED					(200000000)
 #define SYS_SGX_HWRECOVERY_TIMEOUT_FREQ		(100) // 10ms (100hz)
@@ -73,7 +73,7 @@ static SGX_DEVICE_MAP	gsSGXDeviceMap;
 IMG_CPU_VIRTADDR gsSGXRegsCPUVAddr;
 IMG_CPU_VIRTADDR gsSGXSPCPUVAddr;
 
-static char gszVersionString[] = "SGX540 S5PC110";
+static char gszVersionString[] = "SGX535 S5L8930";
 
 IMG_UINT32   PVRSRV_BridgeDispatchKM( IMG_UINT32  Ioctl,
 									IMG_BYTE   *pInBuf,
@@ -150,10 +150,10 @@ static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 {
 	PVR_UNREFERENCED_PARAMETER(psSysData);
 
-	gsSGXDeviceMap.sRegsSysPBase.uiAddr = SGX540_BASEADDR;
+	gsSGXDeviceMap.sRegsSysPBase.uiAddr = SGX535_BASEADDR;
 	gsSGXDeviceMap.sRegsCpuPBase = SysSysPAddrToCpuPAddr(gsSGXDeviceMap.sRegsSysPBase);
 	gsSGXDeviceMap.ui32RegsSize = SGX_REG_SIZE;
-	gsSGXDeviceMap.ui32IRQ = SGX540_IRQ;
+	gsSGXDeviceMap.ui32IRQ = SGX535_IRQ;
 
 #if defined(SGX_FEATURE_HOST_PORT)
 	/* HostPort: */
@@ -176,7 +176,7 @@ static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 		device interrupt IRQ
 		Note: no interrupts available on No HW system
 	*/
-	gsSGXDeviceMap.ui32IRQ = SGX540_IRQ;
+	gsSGXDeviceMap.ui32IRQ = SGX535_IRQ;
 
 #if defined(PDUMP)
 	{

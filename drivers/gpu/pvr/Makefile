@@ -134,7 +134,7 @@ ccflags-$(CONFIG_PLAT_S5L) += \
 
 ccflags-$(CONFIG_PLAT_S5L) += \
 	-DSGX535 -DSUPPORT_SGX535 \
-	-DSGX_CORE_REV=120
+	-DSGX_CORE_REV=121
 
 pvrsrvkm-$(CONFIG_PLAT_S5L) += \
 	s5l/sysconfig.o \

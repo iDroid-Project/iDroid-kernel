@@ -1027,7 +1027,7 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 
 			if(block == 0xFFFF)
 				continue;
-			//print_hex_dump(KERN_INFO, "spareBuffer1 : ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
+			print_hex_dump(KERN_INFO, "spareBuffer1 : ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
 
 			if(FAILED(apple_vfl_read_nand_page(_vfl, ce, block*vfl->geometry.pages_per_block, pageBuffer, spareBuffer)))
 				continue;

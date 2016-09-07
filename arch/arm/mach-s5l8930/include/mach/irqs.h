@@ -42,6 +42,7 @@
 #define IRQ_CLCD1		0x30
 #define IRQ_RGBOUT0		0x31
 #define IRQ_RGBOUT1		0x32
+#define IRQ_3D			S5L_IRQ_VIC2(10)
 
 #define IRQ_FMI0 0x22
 #define IRQ_FMI1 0x23

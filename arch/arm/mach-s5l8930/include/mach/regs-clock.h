@@ -63,4 +63,8 @@
 #define CLOCK_CON_SRC(x)	(((x) >> CLOCK_CON_SRC_SHIFT) & CLOCK_CON_SRC_MASK)
 #define CLOCK_CON_DIV(x, y)	({ const clock_divider_t *div = &clock_dividers[(y)]; (((x) & div->mask) >> div->shift); })
 
+
+#define S5P_WAKEUP_STAT		(VA_PMGR0 + 0xC200)
+#define S5P_CLK_DIV0		(VA_PMGR0 + 0x300)
+
 #endif //_S5L_8930_REGS_CLOCK_

@@ -1057,7 +1057,7 @@ static int h2fmi_read_pages(struct h2fmi_state *_state, int _count, u16 *_ces,
 	_state->transaction.eccres = _eccres;
 	_state->transaction.eccbuf = _eccbuf;
 
-	spin_lock(&_state->lock);
+	//spin_lock(&_state->lock);
 	_state->state = H2FMI_READ;
 	_state->read_state = H2FMI_READ_BEGIN;
 
@@ -1079,7 +1079,7 @@ static int h2fmi_read_pages(struct h2fmi_state *_state, int _count, u16 *_ces,
 	cdma_cancel(_state->pdata->dma1);
 
 	_state->state = H2FMI_IDLE;
-	spin_unlock(&_state->lock);
+	//spin_unlock(&_state->lock);
 	h2fmi_clear_interrupt(_state);
 
 	// metadata whitening
@@ -1410,7 +1410,7 @@ static int h2fmi_write_pages(struct h2fmi_state *_state, int _count,
 
 	_state->transaction.write_mode = _mode;
 
-	spin_lock(&_state->lock);
+	//spin_lock(&_state->lock);
 	_state->state = H2FMI_WRITE;
 	_state->write_state = H2FMI_WRITE_BEGIN;
 
@@ -1487,7 +1487,7 @@ static int h2fmi_write_pages(struct h2fmi_state *_state, int _count,
 	h2fmi_reset_timing(_state);
 
 	_state->state = H2FMI_IDLE;
-	spin_unlock(&_state->lock);
+	//spin_unlock(&_state->lock);
 	h2fmi_clear_interrupt(_state);
 
 	if (_state->transaction.result)
@@ -1513,7 +1513,7 @@ static int h2fmi_erase_blocks(struct h2fmi_state *_state, int _num, u16 *_ces,
 	_state->transaction.chips = _ces;
 	_state->transaction.pages = _pages;
 
-	spin_lock(&_state->lock);
+	//spin_lock(&_state->lock);
 	_state->state = H2FMI_ERASE;
 
 	h2fmi_reset(_state);
@@ -1589,7 +1589,7 @@ static int h2fmi_erase_blocks(struct h2fmi_state *_state, int _num, u16 *_ces,
 	h2fmi_disable_bus(_state);
 
 	_state->state = H2FMI_IDLE;
-	spin_unlock(&_state->lock);
+	//spin_unlock(&_state->lock);
 
 	if (!eraseOK)
 		return -EIO;

@@ -86,10 +86,10 @@ static const struct file_operations pmstats_ops = {
 
 void __init pmstats_init(void)
 {
-	pr_info("pmstats at %08x\n", pm_debug_scratchpad);
-	if (pm_debug_scratchpad)
-		pmstats = ioremap(pm_debug_scratchpad, 4096);
-	else
+	//pr_info("pmstats at %08x\n", pm_debug_scratchpad);
+	//if (pm_debug_scratchpad)
+	//	pmstats = ioremap(pm_debug_scratchpad, 4096);
+	//else
 		pmstats = kzalloc(4096, GFP_ATOMIC);
 
 	if (!memcmp(pmstats->magic, PMSTATS_MAGIC, 16)) {
@@ -387,7 +387,7 @@ static int s3c_pm_enter(suspend_state_t state)
 	s3c_pm_restore_core();
 	s3c_pm_restore_uarts();
 	s3c_pm_restore_gpios();
-	s5pv210_restore_eint_group();
+	//s5pv210_restore_eint_group();
 
 	s3c_pm_debug_init();
 

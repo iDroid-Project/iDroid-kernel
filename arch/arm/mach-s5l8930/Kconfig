@@ -17,6 +17,7 @@ config CPU_S5L8930
 	select S5L_CDMA
 	select USB_GADGET_S3C_HSOTG
 	select KEYBOARD_GPIO
+	select S5L_EXT_INT
 	help
 	  Enable S5L8930 CPU support
 

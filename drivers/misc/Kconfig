@@ -589,4 +589,10 @@ config GENERIC_BLN
          Say Y here to enable the backlight notification
          for android led-notification (modified liblight needed)
 
+config GPS_GPIO_BRCM4750
+	bool "Enable gpio controller for GPS brcm 4750"
+	default y
+	---help---
+	Adds GPIO controller driver for GPS Broadcom 4750 chipset
+
 endif # MISC_DEVICES

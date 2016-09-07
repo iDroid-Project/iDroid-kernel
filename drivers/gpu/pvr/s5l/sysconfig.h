@@ -27,7 +27,7 @@
 #if !defined(__SOCCONFIG_H__)
 #define __SOCCONFIG_H__
 
-#define VS_PRODUCT_NAME	"s5pc110"
+#define VS_PRODUCT_NAME	"s5l8930"
 
 #define SYS_SGX_USSE_COUNT					(1)
 

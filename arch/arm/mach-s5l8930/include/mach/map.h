@@ -95,6 +95,7 @@
 
 #define PA_UART(x)		(0x82500000 + ((x)*0x100000))
 #define VA_UART(x)		(S3C_VA_UART + ((x)*0x4000))
+#define S3C_VA_UARTx(x)		VA_UART(x)
 #define SZ_UART			0x1000
 #define PA_UART0		PA_UART(0)
 #define VA_UART0		VA_UART(0)
