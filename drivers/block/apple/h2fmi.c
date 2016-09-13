@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2011 Richard Ian Taylor.
+ * Copyright (c) 2016 Erfan Abdi.
  *
  * This file is part of the iDroid Project. (http://www.idroidproject.org).
  *
@@ -20,6 +21,7 @@
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
 #include <linux/apple_flash.h>
+#include <linux/time.h>
 #include <plat/h2fmi.h>
 #include <plat/cdma.h>
 #include <mach/clock.h>
@@ -229,6 +231,10 @@ struct h2fmi_state {
 	u32 ecc_fmt;
 	uint8_t ecc_bits;
 	uint8_t ecc_tag;
+
+	uint64_t last_action_time; // 124
+	uint64_t time_interval; // 12C
+	uint64_t stage_time_interval; // 134
 };
 
 static struct h2fmi_chip_info *h2fmi_find_chip_info(uint8_t _id[8]) {
@@ -301,16 +307,17 @@ static int h2fmi_wait(struct h2fmi_state *_state, void *__iomem _reg,
 		uint32_t _mask, uint32_t _val) {
 	int i;
 
-	for (i = 0; i < 10 && ((readl(_reg) & _mask) != _val); i++)
-		msleep(10);
+	//for (i = 0; i < 10 && ((readl(_reg) & _mask) != _val); i++)
+	//	msleep(10);
 	//FIXME:Make it faster like OIB
-	//while(!(readl(_reg) & _mask));
+	while(!(readl(_reg) & _mask));
+	msleep(1);
 	//!= _val)){
 
 	//}
 
-	if (i == 10)
-		return -ETIMEDOUT;
+	//if (i == 10)
+	//	return -ETIMEDOUT;
 
 	writel(_val, _reg);
 	return 0;
@@ -417,10 +424,9 @@ static void h2fmi_read(struct h2fmi_state *_state, void *_buff, size_t _sz) {
 	u32amt = left >> 2;
 	left -= u32amt * sizeof(u32);
 
-	for (i = 0; i < u32amt; i++) {
+	for (i = 0; i < u32amt; i++)
 		u32b[i] = readl(_state->base_regs + H2FMI_DATA0);
-		//printk("%x \n",u32b[i]);
-	}
+
 	if (!left)
 		return;
 
@@ -550,6 +556,20 @@ static int h2fmi_prepare(struct h2fmi_state *_state, u8 _a, u8 _b) {
 
 static int h2fmi_setup_transfer(struct h2fmi_state *_state) {
 
+	struct clk *clk;
+	int x = 24000000;
+
+	clk = clk_get(&_state->dev->dev, "base0");
+		if (IS_ERR(clk))
+			return PTR_ERR(clk);
+
+		x = clk_get_rate(clk);
+
+		clk_put(clk);
+
+	_state->time_interval = (x / 1000000) * 2000000;
+	_state->stage_time_interval = _state->time_interval / 4;
+
 	if (_state->state != H2FMI_READ) {
 		h2fmi_set_format(_state, _state->ecc_bits + 1);
 		h2fmi_clear_ecc_sts(_state);
@@ -573,8 +593,8 @@ static int h2fmi_transfer_ready(struct h2fmi_state *_state) {
 	if (readl(_state->base_regs + H2FMI_CSTS) & 0x100)
 		return 1;
 	else {
-		//if(timer_get_system_microtime() - _fmi->last_action_time > _fmi->time_interval)
-		//	return -ETIMEDOUT;
+		if(current_kernel_time().tv_nsec - _state->last_action_time > _state->time_interval)
+			return -ETIMEDOUT;
 
 		return 0;
 	}
@@ -667,8 +687,6 @@ static void h2fmi_aes_gen_iv(void *_param, u32 _segment, u32 *_iv) {
 static u32 h2fmi_aes_key[] = { 0xAB42A792, 0xBF69C908, 0x12946C00, 0xA579CCD3, };
 static uint32_t bpp = 0;
 static void h2fmi_aes_handler_1(void *_param, u32 _segment, u32 *_iv) {
-	//bufferPrintf("fmi: aes_handler_1.\r\n");
-	//struct h2fmi_state *state = _param;
 	int param = _param;
 	int val = ((param - h2fmi_ftl_databuf) / bpp) + h2fmi_ftl_smth[0];
 	int i;
@@ -723,9 +741,7 @@ static void h2fmi_aes_handler_emf(uint32_t _param, uint32_t _segment,
 		_iv[i] = val;
 	}
 
-	 if(h2fmi_emf_sha)
-		//panic("h2fmi_emf_sha not implemented yet.\n");
-	 {
+	 if(h2fmi_emf_sha){
 
 	 struct shash_alg *sha1;
 	 struct shash_desc *context;
@@ -747,8 +763,6 @@ static void h2fmi_aes_handler_emf(uint32_t _param, uint32_t _segment,
 	 aes_crypto_cmd(0x10, buff, buff, 16, 0 << 28, (void*)sha1_hash, (void*)NULL);
 	 memcpy(_iv, buff, 16);
 
-	// aes_hw_crypto_cmd(0x10,buff,buff,);
-	 //_iv, 16, AESCustom, sha1_hash, CDMA_AES_128, NULL); //FIXME by CDMA AES -erfanoabdi
 	 h2fmi_emf_iv_offset += 0x1000;
 	 }
 }
@@ -849,14 +863,17 @@ static int h2fmi_rw_large_page(struct h2fmi_state *_state) {
 			_state->transaction.sg_num_data,
 			_state->geo.bytes_per_page * _state->transaction.count,
 			_state->base_dma + H2FMI_DATA0, 4, 8, _state->pdata->pid0);
-	if (ret)
+	if (ret){
+		printk("Page Buffer CDMA Begin Failed\n");
 		return ret;
+	}
 
 	ret = cdma_begin(_state->pdata->dma1, dir, _state->transaction.sg_oob,
 			_state->transaction.sg_num_oob,
 			_state->geo.oob_size * _state->transaction.count,
 			_state->base_dma + H2FMI_DATA1, 1, 1, _state->pdata->pid1);
 	if (ret) {
+		printk("Spare Buffer CDMA Begin Failed\n");
 		cdma_cancel(_state->pdata->dma0);
 		return ret;
 	}
@@ -865,18 +882,13 @@ static int h2fmi_rw_large_page(struct h2fmi_state *_state) {
 }
 
 static int h2fmi_read_complete(struct h2fmi_state *_state) {
-	//printk(KERN_INFO "h2fmi_read_complete\n");
-
 	h2fmi_clear_interrupt(_state);
 	h2fmi_disable_bus(_state);
-	//printk(KERN_INFO "h2fmi_read_complete_done\n");
 
 	return 0;
 }
 
 static int h2fmi_read_state_2(struct h2fmi_state *_state) {
-	//printk(KERN_INFO "h2fmi_read_state_2\n");
-
 	int val = h2fmi_transfer_ready(_state);
 	if (val < 0) {
 		writel(0, _state->flash_regs + H2FMI_NREQ);
@@ -893,11 +905,11 @@ static int h2fmi_read_state_2(struct h2fmi_state *_state) {
 		if (_state->transaction.curr == 0) {
 			writel(3, _state->base_regs + H2FMI_CCMD);
 			h2fmi_rw_large_page(_state);
-			//_fmi->last_action_time = timer_get_system_microtime();
+			_state->last_action_time = current_kernel_time().tv_nsec;
 		} else {
 			writel(0x82, _state->base_regs + H2FMI_CCMD);
 			writel(0x3, _state->base_regs + H2FMI_CCMD);
-			//_fmi->last_action_time = timer_get_system_microtime();
+			_state->last_action_time = current_kernel_time().tv_nsec;
 			h2fmi_check_ecc(_state);
 		}
 	}
@@ -906,20 +918,18 @@ static int h2fmi_read_state_2(struct h2fmi_state *_state) {
 }
 
 static int h2fmi_read_state_4(struct h2fmi_state *_state) {
-	//printk(KERN_INFO "h2fmi_read_state_4\n");
-
 	if (readl(_state->base_regs + H2FMI_UNK8) & 4) {
-		/*if(timer_get_system_microtime() - _fmi->last_action_time > _fmi->stage_time_interval)
-		 {
-		 _fmi->current_status = 0;
-		 _fmi->failure_details.overall_status = 0x8000001F;
-		 }
-		 else*/
-		return 0;
+		if(current_kernel_time().tv_nsec - _state->last_action_time > _state->stage_time_interval)
+		{
+			_state->transaction.busy = 0;
+			_state->transaction.result = 0x8000001F;
+		}
+		else
+			return 0;
 	} else {
 		if (_state->transaction.curr < _state->transaction.count) {
 			h2fmi_prepare_transfer(_state);
-			//_fmi->last_action_time = timer_get_system_microtime();
+			_state->last_action_time = current_kernel_time().tv_nsec;
 			_state->read_state = H2FMI_READ_2;
 			return h2fmi_read_state_2(_state);
 		} else
@@ -931,8 +941,6 @@ static int h2fmi_read_state_4(struct h2fmi_state *_state) {
 }
 
 static int h2fmi_read_state_1(struct h2fmi_state *_state) {
-	//printk(KERN_INFO "h2fmi_read_state_1\n");
-
 	int reset_chip = 0;
 	if (_state->transaction.new_chip) {
 		_state->transaction.new_chip = 0;
@@ -971,7 +979,7 @@ static int h2fmi_read_state_1(struct h2fmi_state *_state) {
 
 	writel(0x100000, _state->base_regs + H2FMI_CREQ);
 	_state->read_state = H2FMI_READ_4;
-	//_fmi->last_action_time = timer_get_system_microtime();
+	_state->last_action_time = current_kernel_time().tv_nsec;
 	return h2fmi_read_state_4(_state);
 }
 
@@ -979,13 +987,13 @@ static int h2fmi_read_state_3(struct h2fmi_state *_state) {
 	//printk(KERN_INFO "h2fmi_read_state_3\n");
 
 	if ((readl(_state->base_regs + H2FMI_CSTS) & 2) == 0) {
-		/*if(timer_get_system_microtime() - _fmi->last_action_time > _fmi->time_interval)
-		 {
-		 _fmi->current_status = 0;
-		 _fmi->failure_details.overall_status = ETIMEDOUT;
-		 _fmi->state.read_state = H2FMI_READ_DONE;
-		 return h2fmi_read_complete_handler(_fmi);
-		 }*/
+		if(current_kernel_time().tv_nsec - _state->last_action_time > _state->time_interval)
+		{
+		_state->transaction.busy = 0;
+		_state->transaction.result = -ETIMEDOUT;
+		_state->read_state = H2FMI_READ_COMPLETE;
+		 return h2fmi_read_complete(_state);
+		}
 	} else {
 		writel(0, _state->base_regs + H2FMI_CREQ);
 		_state->transaction.curr++;
@@ -1057,7 +1065,7 @@ static int h2fmi_read_pages(struct h2fmi_state *_state, int _count, u16 *_ces,
 	_state->transaction.eccres = _eccres;
 	_state->transaction.eccbuf = _eccbuf;
 
-	//spin_lock(&_state->lock);
+	spin_lock(&_state->lock);
 	_state->state = H2FMI_READ;
 	_state->read_state = H2FMI_READ_BEGIN;
 
@@ -1066,6 +1074,8 @@ static int h2fmi_read_pages(struct h2fmi_state *_state, int _count, u16 *_ces,
 
 	while (_state->read_state != H2FMI_READ_COMPLETE)
 		h2fmi_read_state_machine(_state);
+
+	spin_unlock(&_state->lock);
 
 	if (_state->transaction.busy) {
 		if (cdma_wait(_state->pdata->dma1) || cdma_wait(_state->pdata->dma0)) {
@@ -1079,7 +1089,6 @@ static int h2fmi_read_pages(struct h2fmi_state *_state, int _count, u16 *_ces,
 	cdma_cancel(_state->pdata->dma1);
 
 	_state->state = H2FMI_IDLE;
-	//spin_unlock(&_state->lock);
 	h2fmi_clear_interrupt(_state);
 
 	// metadata whitening
@@ -1100,7 +1109,7 @@ static int h2fmi_read_pages(struct h2fmi_state *_state, int _count, u16 *_ces,
 			sg_ptr = sg_virt(sg);
 			ptr = sg_ptr + sg_off;
 			p = (u32*) ptr;
-			print_hex_dump(KERN_INFO, "SB1: ", DUMP_PREFIX_OFFSET, 16, 1, ptr,12, false);
+			//print_hex_dump(KERN_INFO, "SB1: ", DUMP_PREFIX_OFFSET, 16, 1, ptr,12, false);
 
 			if (!sg_ptr) {
 				if (!i)
@@ -1120,7 +1129,7 @@ static int h2fmi_read_pages(struct h2fmi_state *_state, int _count, u16 *_ces,
 
 			for (j = _state->geo.oob_size; j < _state->geo.oob_alloc_size; j++)
 				ptr[j] = 0xFF;
-			print_hex_dump(KERN_INFO, "SB3: ", DUMP_PREFIX_OFFSET, 16, 1, ptr,12, false);
+			//print_hex_dump(KERN_INFO, "SB3: ", DUMP_PREFIX_OFFSET, 16, 1, ptr,12, false);
 			sg_off += _state->geo.oob_alloc_size;
 			if (sg_off >= sg->length) {
 				if (count == 0)
