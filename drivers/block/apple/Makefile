@@ -1,5 +1,5 @@
 
-blk_dev_apple-y							+= blk_dev.o api.o
+blk_dev_apple-y							+= api.o blk_dev.o
 
 obj-$(CONFIG_BLK_DEV_APPLE)				+= blk_dev_apple.o
 obj-$(CONFIG_BLK_DEV_APPLE_VSVFL)		+= vsvfl.o

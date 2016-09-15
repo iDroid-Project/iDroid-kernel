@@ -5,9 +5,8 @@
 
 void* yaftl_alloc(size_t size)
 {
-	void * buffer = kmalloc_large(size,GFP_KERNEL);
-	//printk("size :%d",size);
-	//msleep(10000);
+	void * buffer = kmalloc(size, GFP_ATOMIC);
+
 	if (!buffer)
 		panic("yaftl_alloc failed\r\n");
 

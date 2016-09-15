@@ -4,3 +4,4 @@
 struct YAFTL {
 	struct apple_ftl ftl;
 };
+

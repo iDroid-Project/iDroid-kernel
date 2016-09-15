@@ -3,7 +3,7 @@
 
 #include <ftl/yaftl_common.h>
 
-int gcInit();
+int gcInit(void);
 
 void gcResetReadCache(GCReadC* _readC);
 
@@ -15,6 +15,6 @@ void gcPrepareToWrite(uint32_t _numPages);
 
 void gcFreeIndexPages(uint32_t _victim, uint8_t _scrub);
 
-void gcPrepareToFlush();
+void gcPrepareToFlush(void);
 
 #endif // FTL_YAFTL_GC_H

@@ -433,6 +433,7 @@ static error_t vfl_vsvfl_read_single_page(struct apple_vfl *_vfl, uint32_t dwVpn
 	struct VSVFL *vfl = _vfl->private;
 	uint32_t pCE = 0, pPage = 0;
 	int ret;
+	u8* spareBuffer;
 
 	if(refresh_page)
 		*refresh_page = 0;
@@ -448,7 +449,7 @@ static error_t vfl_vsvfl_read_single_page(struct apple_vfl *_vfl, uint32_t dwVpn
 	}
 
 	// Hack to get reading by absolute page number.
-	u8* spareBuffer = kmalloc(vfl->geometry.bytes_per_spare, GFP_KERNEL);
+	spareBuffer = kmalloc(vfl->geometry.bytes_per_spare, GFP_KERNEL);
 
 	ret = apple_vfl_read_nand_page(_vfl, pCE, pPage, buffer, spareBuffer);
 
@@ -953,6 +954,11 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 		int i;
 		int page = 8;
 		int last = 0;
+		vsvfl_context_t *curVFLCxt;
+		int minUsn = 0xFFFFFFFF;
+		int VFLCxtIdx = 4;
+		uint8_t* pageBuffer;
+		uint8_t* spareBuffer;
 
 		vfl->bbt[ce] = (uint8_t*) kmalloc(CEIL_DIVIDE(vfl->geometry.blocks_per_ce, 8), GFP_KERNEL);
 
@@ -970,21 +976,21 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 		if(ce >= vfl->geometry.num_ce)
 			return -EIO;
 
-		vsvfl_context_t *curVFLCxt = &vfl->contexts[ce];
-		uint8_t* pageBuffer = kmalloc(vfl->geometry.bytes_per_page, GFP_KERNEL);
-		uint8_t* spareBuffer = kmalloc(vfl->geometry.bytes_per_spare, GFP_KERNEL);
+		curVFLCxt = &vfl->contexts[ce];
+		pageBuffer = kmalloc(vfl->geometry.bytes_per_page, GFP_KERNEL);
+		spareBuffer = kmalloc(vfl->geometry.bytes_per_spare, GFP_KERNEL);
 		memset(pageBuffer,0,vfl->geometry.bytes_per_page);
 		//memset(spareBuffer,0,vfl->geometry.bytes_per_spare);
-		//int fl=0;
-		//for (fl=0;fl<=10;fl++){
-			//memset(spareBuffer,0,vfl->geometry.bytes_per_page);
-			//int rr = apple_vfl_read_nand_page(_vfl, ce, vfl->geometry.reserved_blocks*vfl->geometry.pages_per_block, pageBuffer, spareBuffer);
-			//printk("-------%d Start-------\n",fl);
-			//print_hex_dump(KERN_INFO, "", DUMP_PREFIX_OFFSET, 16, 1, pageBuffer,0x200, true);
-			//printk("--------%d End--------\n",fl);
-			//print_hex_dump(KERN_INFO, "SB: ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
-			//msleep(1000);
-		//}
+		/*int fl=0;
+		for (fl=0;fl<=5;fl++){
+			memset(pageBuffer,0,vfl->geometry.bytes_per_page);
+			int rr = apple_vfl_read_nand_page(_vfl, ce, vfl->geometry.reserved_blocks*vfl->geometry.pages_per_block, pageBuffer, spareBuffer);
+			printk("-------%d Start-------\n",fl);
+			print_hex_dump(KERN_INFO, "", DUMP_PREFIX_OFFSET, 16, 1, pageBuffer,0x200, true);
+			printk("--------%d End--------\n",fl);
+			print_hex_dump(KERN_INFO, "SB: ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
+			msleep(1000);
+		}*/
 
 		if(pageBuffer == NULL || spareBuffer == NULL || !vfl->bbt[ce]) {
 			printk("vfl: cannot allocate page and spare buffer\r\n");
@@ -1018,22 +1024,21 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 		// Since VFLCxtBlock is a ringbuffer, if blockA.page0.spare.usnDec < blockB.page0.usnDec, then for any page a
 		// in blockA and any page b in blockB, a.spare.usNDec < b.spare.usnDec. Therefore, to begin finding the
 		// page/VFLCxt with the lowest usnDec, we should just look at the first page of each block in the ring.
-		int minUsn = 0xFFFFFFFF;
-		int VFLCxtIdx = 4;
 
 		for(i = 0; i < 4; i++) {
+			vfl_vsvfl_spare_data_t *spareData;
 			uint16_t block = curVFLCxt->vfl_context_block[i];
 			//printk("vsvfl: block:%x\r\n",block);
 
 			if(block == 0xFFFF)
 				continue;
-			print_hex_dump(KERN_INFO, "spareBuffer1 : ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
+			//print_hex_dump(KERN_INFO, "spareBuffer1 : ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
 
 			if(FAILED(apple_vfl_read_nand_page(_vfl, ce, block*vfl->geometry.pages_per_block, pageBuffer, spareBuffer)))
 				continue;
 			print_hex_dump(KERN_INFO, "spareBuffer: ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, false);
 			//msleep(4000);
-			vfl_vsvfl_spare_data_t *spareData = (vfl_vsvfl_spare_data_t*)spareBuffer;
+			spareData = (vfl_vsvfl_spare_data_t*)spareBuffer;
 			//printk("vsvfl: spareData->meta.usnDec:%x\r\n",((vfl_vsvfl_spare_data_t*)spareBuffer)->meta.usnDec);
 
 			if(spareData->meta.usnDec > 0 && spareData->meta.usnDec <= minUsn) {
@@ -1147,15 +1152,15 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 	printk("vsvfl: detected chip vendor 0x%06x\r\n", vendorType);
 
 	{
+		uint32_t bank, i, num_reserved, num_non_reserved;
 		uint32_t banksPerCE = vfl->geometry.banks_per_ce;
-		if(FAILED(apple_vfl_set(_vfl, NAND_BANKS_PER_CE_VFL, &banksPerCE)))
+		if(FAILED(apple_vfl_set(_vfl, NAND_BANKS_PER_CE_VFL, banksPerCE)))
 			return -EIO;
 		
 
 		// Now, discard the old scfg bad-block table, and set it using the VFL context's reserved block pool map.
-		uint32_t bank, i;
-		uint32_t num_reserved = vfl->contexts[0].reserved_block_pool_start;
-		uint32_t num_non_reserved = vfl->geometry.blocks_per_bank_vfl - num_reserved;
+		num_reserved = vfl->contexts[0].reserved_block_pool_start;
+		num_non_reserved = vfl->geometry.blocks_per_bank_vfl - num_reserved;
 
 		
 		for(ce = 0; ce < vfl->geometry.num_ce; ce++) {
@@ -1218,7 +1223,7 @@ static int vsvfl_get(struct apple_vfl *_vfl, int _item)
 static int vsvfl_set(struct apple_vfl *_vfl, int _item, int _val)
 {
 
-	struct VSVFL *vfl = get_vsvfl(_vfl);
+	//struct VSVFL *vfl = get_vsvfl(_vfl);
 	struct apple_nand *nand = _vfl->devices[0];
 
 	switch(_item)
@@ -1230,7 +1235,7 @@ static int vsvfl_set(struct apple_vfl *_vfl, int _item, int _val)
 
 }
 
-static void* *vfl_vsvfl_get_stats(struct apple_vfl *_vfl, uint32_t *size)
+static void* vfl_vsvfl_get_stats(struct apple_vfl *_vfl, uint32_t *size)
 {
 	struct VSVFL *vfl = get_vsvfl(_vfl);
 	if(size)
@@ -1238,7 +1243,7 @@ static void* *vfl_vsvfl_get_stats(struct apple_vfl *_vfl, uint32_t *size)
 	return (void*)vfl->stats;
 }
 
-static struct apple_nand* *vfl_vsvfl_get_device(struct apple_vfl *_vfl, int num)
+static struct apple_nand* vfl_vsvfl_get_device(struct apple_vfl *_vfl, int num)
 {
 	struct apple_nand *nand = _vfl->devices[num];
 	return nand;

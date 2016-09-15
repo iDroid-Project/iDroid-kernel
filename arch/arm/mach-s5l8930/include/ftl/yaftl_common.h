@@ -328,9 +328,9 @@ extern error_t YAFTL_readPage(uint32_t _page, uint8_t* _data_ptr, SpareData* _sp
 
 extern uint32_t YAFTL_writePage(uint32_t _page, uint8_t* _data_ptr, SpareData* _spare_ptr);
 
-extern error_t YAFTL_writeIndexTOC();
+extern error_t YAFTL_writeIndexTOC(void);
 
-extern uint32_t YAFTL_findFreeTOCCache();
+extern uint32_t YAFTL_findFreeTOCCache(void);
 
 extern uint32_t YAFTL_clearEntryInCache(uint16_t _cacheIdx);
 

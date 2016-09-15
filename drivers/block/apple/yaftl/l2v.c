@@ -53,7 +53,7 @@ error_t L2V_Init(uint32_t totalPages, uint32_t numBlocks, uint32_t pagesPerSublk
 	return SUCCESS;
 }
 
-void L2V_Open()
+void L2V_Open(void)
 {
 	uint32_t tocIndex = 0;
 	uint32_t gcIndex = 0;
@@ -148,12 +148,12 @@ static void L2V_SetFirstNode(L2VNode* node)
 	++L2V.nodeCount;
 }
 
-L2VNode* L2V_EraseFirstNode()
+L2VNode* L2V_EraseFirstNode(void)
 {
+	L2VNode* node = L2V.firstNode;
 	if (!L2V.firstNode)
 		panic("L2V: currentNode not set\r\n");
 
-	L2VNode* node = L2V.firstNode;
 	L2V.firstNode = node->next;
 	--L2V.nodeCount;
 	return node;
@@ -162,16 +162,19 @@ L2VNode* L2V_EraseFirstNode()
 void L2V_Search(GCReadC* _c)
 {
 	// for now
-	_c->vpn = L2V_VPN_MISS;
-	_c->span++;
-	return;
 
 	uint32_t nodeSize;
 	uint32_t pageNum;
 	uint32_t span, Span, vpn, Vpn;
 	uint32_t bits, setting, Setting, value;
-
 	uint32_t* node = (uint32_t*)((uint8_t*)&_c->node->next + _c->next_nOfs);
+
+	uint32_t targTofs, targTree, offset, nextSpan;
+	L2VNode* pool;
+
+	_c->vpn = L2V_VPN_MISS;
+	_c->span++;
+	return;
 
 	if (L2V.previousNode != _c->field_24 || _c->pageIndex != _c->field_14)
 		pageNum = _c->pageIndex;
@@ -225,8 +228,8 @@ void L2V_Search(GCReadC* _c)
 	_c->field_20 = 0;
 	_c->vpn = L2V_VPN_MISS;
 
-	uint32_t targTofs = pageNum % 0x8000;
-	uint32_t targTree = pageNum / 0x8000; // root number
+	targTofs = pageNum % 0x8000;
+	targTree = pageNum / 0x8000; // root number
 	if(L2V.numRoots <= targTree)
 		panic("L2V: targTree has to be less than L2V.numRoots");
 
@@ -241,9 +244,9 @@ void L2V_Search(GCReadC* _c)
 
 	_c->next_nOfs = 0;
 
-	L2VNode* pool = NULL;
-	uint32_t offset = 0;
-	uint32_t nextSpan = 0;
+	pool = NULL;
+	offset = 0;
+	nextSpan = 0;
 
 	while (1)
 	{
@@ -268,9 +271,9 @@ void L2V_Search(GCReadC* _c)
 
 			return;
 		} else {
+			uint32_t nOfs = 0;
 			pool = &L2V.Pool[vpn];
 			nodeSize = 0x40;
-			uint32_t nOfs = 0;
 			while (1)
 			{
 				node = (uint32_t*)((uint8_t*)&pool->next + nOfs);

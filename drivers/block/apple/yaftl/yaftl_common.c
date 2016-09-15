@@ -11,11 +11,6 @@ struct apple_vfl* vfl = 0;
 
 /* Internals */
 
-typedef enum Boolean {
-	FALSE = 0,
-	TRUE = 1
-} Boolean;
-
 static void deallocBTOC(uint32_t* btoc)
 {
 	uint32_t i;
@@ -47,12 +42,12 @@ static int writeIndexPage(void* _pBuf, SpareData* _pSpare)
 {
 	uint32_t page;
 
-	while (TRUE) {
+	while (true) {
 		if (sInfo.latestIndexBlk.usedPages >= sGeometry.pagesPerSublk -
 				sInfo.tocPagesPerBlock) {
 			// Current index block is full, obtain a fresh one.
-			YAFTL_closeLatestBlock(FALSE);
-			YAFTL_allocateNewBlock(FALSE);
+			YAFTL_closeLatestBlock(false);
+			YAFTL_allocateNewBlock(false);
 
 			if (sInfo.latestIndexBlk.usedPages != 0) {
 				panic("YAFTL: writeIndexPage expected a fresh index "
@@ -72,7 +67,7 @@ static int writeIndexPage(void* _pBuf, SpareData* _pSpare)
 			break;
 
 		gcListPushBack(&sInfo.gc.index.list, sInfo.latestIndexBlk.blockNum);
-		YAFTL_allocateNewBlock(FALSE);
+		YAFTL_allocateNewBlock(false);
 	}
 
 	++sInfo.blockArray[sInfo.latestIndexBlk.blockNum].validPagesINo;
@@ -189,7 +184,7 @@ int YAFTL_writeMultiPages(uint32_t _block, uint32_t _start, size_t _numPages, ui
 
 	if (sInfo.field_78) {
 		YAFTL_writeIndexTOC();
-		sInfo.field_78 = FALSE;
+		sInfo.field_78 = false;
 	}
 
 	for (i = 0; i < _numPages; ++i) {
@@ -237,10 +232,10 @@ void YAFTL_allocateNewBlock(uint8_t isUserBlock)
 		if ((isUserBlock && unkn5 == 2) || (!isUserBlock && unkn5 == 4)) {
 			if (sInfo.field_78) {
 				YAFTL_writeIndexTOC();
-				sInfo.field_78 = FALSE;
+				sInfo.field_78 = false;
 			}
 
-			if (FAILED(vfl->erase_single_block(vfl, currBlk, TRUE))) {
+			if (FAILED(vfl->erase_single_block(vfl, currBlk, true))) {
 				panic(
 						"YAFTL: YAFTL_allocateNewBlock failed to erase block %d\r\n",
 						currBlk);
@@ -286,10 +281,10 @@ void YAFTL_allocateNewBlock(uint8_t isUserBlock)
 		// Needs erasing.
 		if (sInfo.field_78) {
 			YAFTL_writeIndexTOC();
-			sInfo.field_78 = FALSE;
+			sInfo.field_78 = false;
 		}
 
-		if (FAILED(vfl->erase_single_block(vfl, bestBlk, TRUE)))
+		if (FAILED(vfl->erase_single_block(vfl, bestBlk, true)))
 			return;
 
 		++sInfo.blockArray[bestBlk].eraseCount;
@@ -468,7 +463,7 @@ error_t YAFTL_readPage(uint32_t _page, uint8_t* _data_ptr, SpareData* _spare_ptr
 	sInfo.blockArray[block].readCount++;
 
 	if (sInfo.blockArray[block].readCount > REFRESH_TRIGGER) {
-		sInfo.refreshNeeded = TRUE;
+		sInfo.refreshNeeded = true;
 
 		if (!refreshPage)
 			return result;
@@ -476,7 +471,7 @@ error_t YAFTL_readPage(uint32_t _page, uint8_t* _data_ptr, SpareData* _spare_ptr
 		if (!refreshPage)
 			return result;
 
-		sInfo.refreshNeeded = TRUE;
+		sInfo.refreshNeeded = true;
 	}
 
 	printk(KERN_INFO "YAFTL: refresh triggered at page %d\r\n", _page);
@@ -592,9 +587,9 @@ uint32_t YAFTL_clearEntryInCache(uint16_t _cacheIdx)
 			}
 		}
 	} else {
+		TOCCache* cache = &sInfo.tocCaches[_cacheIdx];
 		bestClean.idx = 0xFFFF;
 		bestDirty.idx = 0xFFFF;
-		TOCCache* cache = &sInfo.tocCaches[_cacheIdx];
 		if (cache->state == CACHESTATE_FREE) {
 			return _cacheIdx;
 		} else if (cache->state == CACHESTATE_CLEAN) {
@@ -627,6 +622,7 @@ uint32_t YAFTL_clearEntryInCache(uint16_t _cacheIdx)
 		SpareData* pSpare = sInfo.spareBuffer11;
 		uint32_t oldPage = sInfo.tocCaches[bestDirty.idx].page;
 		uint32_t oldIndexPage = sInfo.tocArray[oldPage].indexPage;
+		error_t result;
 
 		sInfo.tocArray[oldPage].cacheNum = 0xFFFF;
 		setupIndexSpare(pSpare, oldPage);
@@ -647,7 +643,7 @@ uint32_t YAFTL_clearEntryInCache(uint16_t _cacheIdx)
 		}
 
 		// Write the dirty index page.
-		error_t result = writeIndexPage(sInfo.tocCaches[bestDirty.idx].buffer,
+		result = writeIndexPage(sInfo.tocCaches[bestDirty.idx].buffer,
 				pSpare);
 
 		if (result) {

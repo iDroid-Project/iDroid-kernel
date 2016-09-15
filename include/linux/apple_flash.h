@@ -81,7 +81,7 @@ struct apple_nand
 
 	int (*default_aes)(struct apple_nand *, struct cdma_aes *, int _decrypt);
 	int (*aes)(struct apple_nand *, struct cdma_aes *);
-	void (*setup_aes) (struct h2fmi_state *_state, int _enabled, int _encrypt, int _offset);
+	void (*setup_aes) (struct apple_nand *, int _enabled, int _encrypt, const uint8_t * _offset);
 
 	int (*read)(struct apple_nand *, size_t _count,
 		u16 *_chips, page_t *_pages,
@@ -101,9 +101,6 @@ struct apple_nand
 
 	int (*is_bad)(struct apple_nand*, u16 _ce, page_t _page);
 	void (*set_bad)(struct apple_nand*, u16 _ce, page_t _page);
-	void (*set_ftl_region) (uint32_t _lpn, uint32_t _a2, uint32_t _count, void* _buf);
-	void (*h2fmi_set_emf) (uint32_t enable, uint32_t iv_input);
-	int (*h2fmi_get_emf) ();
 };
 
 static inline int apple_nand_get(struct apple_nand *_nd, int _id)
@@ -132,6 +129,18 @@ extern int apple_nand_erase_block(struct apple_nand*, u16 _ce, page_t _page);
 
 extern int apple_nand_register(struct apple_nand*, struct apple_vfl*, struct device*);
 extern void apple_nand_unregister(struct apple_nand*);
+
+extern uint8_t DKey[32];
+extern uint8_t EMF[32];
+extern int h2fmi_ftl_count;
+extern int h2fmi_ftl_databuf;
+extern int h2fmi_ftl_smth[2];
+extern void set_ftl_region(int _lpn, int _a2, int _count, void* _buf);
+
+extern int h2fmi_emf;
+extern int h2fmi_emf_iv_input;
+extern void h2fmi_set_emf(int enable, int iv_input);
+extern int h2fmi_get_emf(void);
 
 struct apple_vfl
 {
@@ -179,11 +188,11 @@ extern int apple_vfl_special_page(struct apple_vfl*, u16 _ce, char _page[16],
 extern int apple_vfl_read_nand_pages(struct apple_vfl*,
 		size_t _count, u16 _ces, page_t *_pages,
 		struct scatterlist *_sg_data, size_t _sg_num_data,
-		struct scatterlist *_sg_oob, size_t _sg_num_oob, uint8_t offset);
+		struct scatterlist *_sg_oob, size_t _sg_num_oob, const uint8_t * offset);
 extern int apple_vfl_write_nand_pages(struct apple_vfl*,
 		size_t _count, u16 _ces, page_t *_pages,
 		struct scatterlist *_sg_data, size_t _sg_num_data,
-		struct scatterlist *_sg_oob, size_t _sg_num_oob, uint8_t offset);
+		struct scatterlist *_sg_oob, size_t _sg_num_oob, const uint8_t * offset);
 extern int apple_vfl_read_nand_page(struct apple_vfl*, u16 _ce,
 		page_t _page, uint8_t *_data, uint8_t *_oob);
 extern int apple_vfl_write_nand_page(struct apple_vfl*, u16 _ce,
@@ -236,7 +245,7 @@ struct apple_ftl
 	int (*read)(page_t _page, int nPages, uint8_t *_buffer);
 
 	int (*write)(page_t _page, int nPages, uint8_t *_buffer);
-	void (*flush)();
+	void (*flush)(void);
 
 	int (*get)(struct apple_ftl *, int _info);
 	int (*set)(struct apple_ftl *, int _info, int _val);
@@ -258,7 +267,7 @@ extern int ftl_write_single_page(struct apple_ftl *_dev, page_t _page, uint8_t *
 extern int ftl_detect(struct apple_ftl *_dev, struct apple_vfl *_vfl);
 extern int apple_ftl_register(struct apple_ftl *_dev,struct apple_vfl *_vfl);
 
-extern void YAFTL_Flush();
+extern void YAFTL_Flush(void);
 extern int ftl_yaftl_read_page(page_t _page, int nPages, uint8_t *_buffer);
 extern int ftl_yaftl_write_page(page_t _page, int nPages, uint8_t *_buffer);
 /*
@@ -269,7 +278,35 @@ extern error_t (*ftl_read_single_page_t)(struct apple_ftl *, uint32_t _page, uin
 extern error_t (*ftl_write_single_page_t)(struct apple_ftl *, uint32_t _page, uint8_t *_buffer);
 */
 
-extern int iphone_block_probe(struct apple_ftl *_dev);
-extern int iphone_block(struct apple_ftl *_dev);
+typedef struct _emf_key {
+	uint32_t length;
+	uint8_t key[1];
+} EMFKey;
+
+typedef struct _lwvm_key {
+	uint8_t unkn[32];
+	uint64_t partition_uuid[2];
+	uint8_t key[32];
+} LwVMKey;
+
+typedef struct _locker_entry {
+	uint16_t locker_magic; // 'kL'
+	uint16_t length;
+	uint8_t identifier[4];
+	uint8_t key[1];
+} LockerEntry;
+
+typedef struct _plog_struct {
+	uint8_t header[0x38]; // header[0:16] XOR header[16:32] = ’ecaF’ + dw(0x1) + dw(0x1) + dw(0x0)
+	uint32_t generation;
+	uint32_t crc32; // headers + data
+
+	LockerEntry locker;
+} PLog;
+extern void get_encryption_keys(struct apple_vfl *_vfl);
+
+
+extern int iphone_block_probe(void);
+extern int iphone_block(void);
 
 #endif //_LINUX_APPLE_FLASH_H
