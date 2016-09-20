@@ -1,5 +1,16 @@
+/**
+ * Copyright (c) 2011 Richard Ian Taylor.
+ * Copyright (c) 2016 Erfan Abdi.
+ *
+ * This file is part of the iDroid Project. (http://www.idroidproject.org).
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
 #include <linux/apple_flash.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 
 typedef int error_t;
 #define FAILED(x) ((x) < 0)
@@ -293,6 +304,8 @@ static error_t virtual_page_number_to_physical(struct apple_vfl *_vfl, uint32_t 
 	bank_offset = vfl->geometry.bank_address_space * (pBlock / vfl->geometry.blocks_per_bank);
 
 	*_ce = ce;
+	//printk("vfl_vsvfl_read_single_page: pBlock:%x pages_per_block_2:%x!\r\n", pBlock,vfl->geometry.pages_per_block_2 );
+
 	*_page = vfl->geometry.pages_per_block_2 * (bank_offset + (pBlock % vfl->geometry.blocks_per_bank))
 			+ ((_vpNum % vfl->geometry.pages_per_sublk) / vfl->geometry.banks_total);
 
@@ -393,8 +406,7 @@ static error_t vfl_vsvfl_write_single_page(struct apple_vfl *_vfl, uint32_t dwVp
 	}
 
 	// TODO: use SGs?
-	//ret = nand_device_write_single_page(vfl->device, pCE, 0, pPage, buffer, spare);
-	ret = apple_vfl_read_nand_page(_vfl, pCE, pPage, buffer, spare);
+	ret = apple_vfl_write_nand_page(_vfl, pCE, pPage, buffer, spare);
 
 	if(ret < 0)
 	{
@@ -421,6 +433,7 @@ static error_t vfl_vsvfl_read_single_page(struct apple_vfl *_vfl, uint32_t dwVpn
 	struct VSVFL *vfl = _vfl->private;
 	uint32_t pCE = 0, pPage = 0;
 	int ret;
+	u8* spareBuffer;
 
 	if(refresh_page)
 		*refresh_page = 0;
@@ -436,8 +449,16 @@ static error_t vfl_vsvfl_read_single_page(struct apple_vfl *_vfl, uint32_t dwVpn
 	}
 
 	// Hack to get reading by absolute page number.
-	// TODO: aes_disable!?
-	ret = apple_vfl_read_nand_page(_vfl, pCE, pPage, buffer, spare);
+	spareBuffer = kmalloc(vfl->geometry.bytes_per_spare, GFP_KERNEL);
+
+	ret = apple_vfl_read_nand_page(_vfl, pCE, pPage, buffer, spareBuffer);
+
+	if(spare){
+		spare[0] = 0;
+			memcpy(spare, spareBuffer, _vfl->get(_vfl, NAND_OOB_ALLOC));
+
+
+	}
 
 	if(!empty_ok && ret == -ENOENT)
 		ret = -EIO;
@@ -569,7 +590,7 @@ static error_t vsvfl_store_vfl_cxt(struct apple_vfl *_vfl, uint32_t _ce) {
 				for (i = 0; i < 4; i++) {
 					uint32_t bankStart = (curVFLCxt->vfl_context_block[nextBlock] / vfl->geometry.blocks_per_bank) * vfl->geometry.bank_address_space;
 					uint32_t blockOffset = curVFLCxt->vfl_context_block[nextBlock] % vfl->geometry.blocks_per_bank;
-					int status = apple_vfl_erase_nand_block(_vfl, _ce, bankStart + blockOffset);
+					int status = _vfl->erase_single_block(_vfl, _ce, bankStart + blockOffset);
 					if(SUCCEEDED(status))
 						break;
 					//vsvfl_mark_bad_vfl_block(_vfl, _ce, curVFLCxt->vfl_context_block[nextBlock], status);
@@ -721,7 +742,7 @@ static error_t vfl_vsvfl_erase_single_block(struct apple_vfl *_vfl, uint32_t _vb
 			bankStart = (blockRemapped / vfl->geometry.blocks_per_bank) * vfl->geometry.bank_address_space;
 			blockOffset = blockRemapped % vfl->geometry.blocks_per_bank;
 
-			status = apple_vfl_erase_nand_block(_vfl, pCE, bankStart + blockOffset);
+			status = _vfl->erase_single_block(_vfl, pCE, bankStart + blockOffset);
 			if (status == 0)
 				break;
 
@@ -785,6 +806,12 @@ static inline error_t vfl_vsvfl_setup_geometry(struct apple_vfl *_vfl)
 	uint16_t z, a;
 	uint32_t mag;
 
+	#ifdef CONFIG_MACH_IPAD_1G
+		vfl->geometry.reserved_blocks = 1;
+	#else
+		vfl->geometry.reserved_blocks = 16;
+	#endif
+
 #define nand_load(what, where) (vfl->geometry.where = apple_vfl_get(_vfl, (what)))
 
 	nand_load(NAND_BLOCKS_PER_CE, blocks_per_ce);
@@ -847,8 +874,10 @@ static inline error_t vfl_vsvfl_setup_geometry(struct apple_vfl *_vfl)
 
 	if(vfl->geometry.num_ce != 1)
 	{
-		vfl->geometry.some_crazy_val =	vfl->geometry.blocks_per_ce
-			- 27 - vfl->geometry.reserved_blocks - vfl->geometry.some_page_mask;
+		vfl->geometry.some_crazy_val =	vfl->geometry.blocks_per_ce - 27
+			- vfl->geometry.reserved_blocks - vfl->geometry.some_page_mask;
+		printk("blocks_per_ce: %x ,reserved_blocks: %x ,some_page_mask: %x ,\r\n", vfl->geometry.blocks_per_ce,vfl->geometry.reserved_blocks,vfl->geometry.some_page_mask);
+
 	}
 	else
 	{
@@ -922,21 +951,18 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 	}
 
 	for(ce = 0; ce < vfl->geometry.num_ce; ce++) {
-		vsvfl_context_t *curVFLCxt = &vfl->contexts[ce];
-		uint8_t* pageBuffer = kmalloc(vfl->geometry.bytes_per_page, GFP_KERNEL);
-		uint8_t* spareBuffer = kmalloc(vfl->geometry.bytes_per_spare, GFP_KERNEL);
 		int i;
-		int minUsn = 0xFFFFFFFF;
-		int VFLCxtIdx = 4;
 		int page = 8;
 		int last = 0;
+		vsvfl_context_t *curVFLCxt;
+		int minUsn = 0xFFFFFFFF;
+		int VFLCxtIdx = 4;
+		uint8_t* pageBuffer;
+		uint8_t* spareBuffer;
 
 		vfl->bbt[ce] = (uint8_t*) kmalloc(CEIL_DIVIDE(vfl->geometry.blocks_per_ce, 8), GFP_KERNEL);
 
-		if(pageBuffer == NULL || spareBuffer == NULL || !vfl->bbt[ce]) {
-			printk("ftl: cannot allocate page and spare buffer\r\n");
-			return -ENOMEM;
-		}
+
 
 		printk("vsvfl: Checking CE %d.\r\n", ce);
 
@@ -950,6 +976,27 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 		if(ce >= vfl->geometry.num_ce)
 			return -EIO;
 
+		curVFLCxt = &vfl->contexts[ce];
+		pageBuffer = kmalloc(vfl->geometry.bytes_per_page, GFP_KERNEL);
+		spareBuffer = kmalloc(vfl->geometry.bytes_per_spare, GFP_KERNEL);
+		memset(pageBuffer,0,vfl->geometry.bytes_per_page);
+		//memset(spareBuffer,0,vfl->geometry.bytes_per_spare);
+		/*int fl=0;
+		for (fl=0;fl<=5;fl++){
+			memset(pageBuffer,0,vfl->geometry.bytes_per_page);
+			int rr = apple_vfl_read_nand_page(_vfl, ce, vfl->geometry.reserved_blocks*vfl->geometry.pages_per_block, pageBuffer, spareBuffer);
+			printk("-------%d Start-------\n",fl);
+			print_hex_dump(KERN_INFO, "", DUMP_PREFIX_OFFSET, 16, 1, pageBuffer,0x200, true);
+			printk("--------%d End--------\n",fl);
+			print_hex_dump(KERN_INFO, "SB: ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
+			msleep(1000);
+		}*/
+
+		if(pageBuffer == NULL || spareBuffer == NULL || !vfl->bbt[ce]) {
+			printk("vfl: cannot allocate page and spare buffer\r\n");
+			return -ENOMEM;
+		}
+
 		// Any VFLCxt page will contain an up-to-date list of all blocks used to store VFLCxt pages. Find any such
 		// page in the system area.
 
@@ -958,7 +1005,7 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 			if(!(vfl->bbt[ce][i / 8] & (1 << (i  & 0x7))))
 				continue;
 
-			printk(KERN_INFO "reading vfl area: %d, %d, %p.\n", i, ce, _vfl);
+			//printk(KERN_INFO "reading vfl area: %d, %d, %p.\n", i, ce, _vfl);
 			if(SUCCEEDED(apple_vfl_read_nand_page(_vfl, ce, i*vfl->geometry.pages_per_block, pageBuffer, spareBuffer)))
 			{
 				memcpy(curVFLCxt->vfl_context_block, ((vsvfl_context_t*)pageBuffer)->vfl_context_block,
@@ -977,15 +1024,22 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 		// Since VFLCxtBlock is a ringbuffer, if blockA.page0.spare.usnDec < blockB.page0.usnDec, then for any page a
 		// in blockA and any page b in blockB, a.spare.usNDec < b.spare.usnDec. Therefore, to begin finding the
 		// page/VFLCxt with the lowest usnDec, we should just look at the first page of each block in the ring.
+
 		for(i = 0; i < 4; i++) {
+			vfl_vsvfl_spare_data_t *spareData;
 			uint16_t block = curVFLCxt->vfl_context_block[i];
-			vfl_vsvfl_spare_data_t *spareData = (vfl_vsvfl_spare_data_t*)spareBuffer;
+			//printk("vsvfl: block:%x\r\n",block);
 
 			if(block == 0xFFFF)
 				continue;
+			//print_hex_dump(KERN_INFO, "spareBuffer1 : ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, true);
 
 			if(FAILED(apple_vfl_read_nand_page(_vfl, ce, block*vfl->geometry.pages_per_block, pageBuffer, spareBuffer)))
 				continue;
+			print_hex_dump(KERN_INFO, "spareBuffer: ", DUMP_PREFIX_OFFSET, 16, 1, spareBuffer,12, false);
+			//msleep(4000);
+			spareData = (vfl_vsvfl_spare_data_t*)spareBuffer;
+			//printk("vsvfl: spareData->meta.usnDec:%x\r\n",((vfl_vsvfl_spare_data_t*)spareBuffer)->meta.usnDec);
 
 			if(spareData->meta.usnDec > 0 && spareData->meta.usnDec <= minUsn) {
 				minUsn = spareData->meta.usnDec;
@@ -1011,14 +1065,12 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 
 			last = page;
 		}
-
 		if(apple_vfl_read_nand_page(_vfl, ce, curVFLCxt->vfl_context_block[VFLCxtIdx]*vfl->geometry.pages_per_block + last, pageBuffer, spareBuffer) != 0) {
 			printk("vsvfl: cannot find readable VFLCxt\n");
 			kfree(pageBuffer);
 			kfree(spareBuffer);
 			return -1;
 		}
-
 		// Aha, so the upshot is that this finds the VFLCxt and copies it into vfl->contexts
 		memcpy(&vfl->contexts[ce], pageBuffer, sizeof(vsvfl_context_t));
 
@@ -1091,25 +1143,25 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 		return -EIO;
 	}
 	
-	//if(FAILED(nand_device_set_info(nand, diVendorType, &vendorType, sizeof(vendorType))))
+	//if(FAILED(vsvfl_set(_vfl, VFL_VENDOR_TYPE, &vendorType)))
 	//	return -EIO;
 
 	vfl->geometry.pages_per_sublk = vfl->geometry.pages_per_block * vfl->geometry.banks_per_ce * vfl->geometry.num_ce;
 	vfl->geometry.banks_total = vfl->geometry.num_ce * vfl->geometry.banks_per_ce;
 	vfl->geometry.blocks_per_bank_vfl = vfl->geometry.blocks_per_ce / vfl->geometry.banks_per_ce;
+	printk("vsvfl: detected chip vendor 0x%06x\r\n", vendorType);
 
 	{
+		uint32_t bank, i, num_reserved, num_non_reserved;
 		uint32_t banksPerCE = vfl->geometry.banks_per_ce;
-		//if(FAILED(nand_device_set_info(nand, diBanksPerCE_VFL, &banksPerCE, sizeof(banksPerCE))))
-		//	return -EIO;
+		if(FAILED(apple_vfl_set(_vfl, NAND_BANKS_PER_CE_VFL, banksPerCE)))
+			return -EIO;
 		
-		
-		// Now, discard the old scfg bad-block table, and set it using the VFL context's reserved block pool map.
-		uint32_t bank, i;
-		uint32_t num_reserved = vfl->contexts[0].reserved_block_pool_start;
-		uint32_t num_non_reserved = vfl->geometry.blocks_per_bank_vfl - num_reserved;
 
-		printk("vsvfl: detected chip vendor 0x%06x\r\n", vendorType);
+		// Now, discard the old scfg bad-block table, and set it using the VFL context's reserved block pool map.
+		num_reserved = vfl->contexts[0].reserved_block_pool_start;
+		num_non_reserved = vfl->geometry.blocks_per_bank_vfl - num_reserved;
+
 		
 		for(ce = 0; ce < vfl->geometry.num_ce; ce++) {
 			memset(vfl->bbt[ce], 0xFF, CEIL_DIVIDE(vfl->geometry.blocks_per_ce, 8));
@@ -1126,7 +1178,8 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 						pBlock = mapEntry;
 					} else if(mapEntry > 0xFFF0) {
 						virtual_block_to_physical_block(_vfl, ce + bank * vfl->geometry.num_ce, num_reserved + i, &pBlock);
-				} else {
+					} else {
+						printk("vsvfl: ce:%x bank:%x i:%x \n",ce,bank,i);
 						panic("vsvfl: bad map table: CE %d, entry %d, value 0x%08x\r\n",
 								ce, bank * num_non_reserved + i, mapEntry);
 					}
@@ -1143,6 +1196,7 @@ static error_t vfl_vsvfl_open(struct apple_vfl *_vfl)
 
 static int vsvfl_get(struct apple_vfl *_vfl, int _item)
 {
+
 	struct VSVFL *vfl = get_vsvfl(_vfl);
 	struct apple_nand *nand = _vfl->devices[0];
 	vsvfl_context_t *ctx = &vfl->contexts[0];
@@ -1158,18 +1212,42 @@ static int vsvfl_get(struct apple_vfl *_vfl, int _item)
 	case VFL_FTL_TYPE:
 		return ctx->ftl_type;
 
+	case NAND_TOTAL_BANKS_VFL:
+			return (vfl->geometry.num_ce * vfl->geometry.banks_per_ce);
+
 	default:
 		return apple_nand_get(nand, _item);
 	}
 }
 
-/*static void* *vfl_vsvfl_get_stats(vfl_device_t *_vfl, uint32_t *size)
+static int vsvfl_set(struct apple_vfl *_vfl, int _item, int _val)
 {
-	struct apple_vfl *vfl = CONTAINER_OF(struct apple_vfl, vfl, _vfl);
+
+	//struct VSVFL *vfl = get_vsvfl(_vfl);
+	struct apple_nand *nand = _vfl->devices[0];
+
+	switch(_item)
+	{
+
+	default:
+	return apple_nand_set(nand, _item, _val);
+	}
+
+}
+
+static void* vfl_vsvfl_get_stats(struct apple_vfl *_vfl, uint32_t *size)
+{
+	struct VSVFL *vfl = get_vsvfl(_vfl);
 	if(size)
 		*size = sizeof(VSVFLStats);
 	return (void*)vfl->stats;
-	}*/
+}
+
+static struct apple_nand* vfl_vsvfl_get_device(struct apple_vfl *_vfl, int num)
+{
+	struct apple_nand *nand = _vfl->devices[num];
+	return nand;
+}
 
 static void vsvfl_cleanup(struct apple_vfl *_vfl)
 {
@@ -1203,22 +1281,26 @@ int apple_vsvfl_detect(struct apple_vfl *_vfl)
 		return -ENOMEM;
 
 	printk(KERN_INFO "apple-vsvfl: detected.\n");
+	memset(&vfl->geometry, 0, sizeof(vfl->geometry));
 
 	_vfl->private = vfl;
 	_vfl->cleanup = vsvfl_cleanup;
 	//_vfl->read = vsvfl_read;
 	//_vfl->write = vsvfl_write;
 	_vfl->get = vsvfl_get;
-	//_vfl->set = vsvf_set;
+	_vfl->set = vsvfl_set;
+	_vfl->get_stats = vfl_vsvfl_get_stats;
 
-	memset(&vfl->geometry, 0, sizeof(vfl->geometry));
+	_vfl->get_device = vfl_vsvfl_get_device;
 
-	// make into module flag or smth?
-#if defined(CONFIG_A4) && !defined(CONFIG_IPAD_1G)
-	vfl->geometry.reserved_blocks = 16;
-#else
-	vfl->geometry.reserved_blocks = 1;
-#endif
+	_vfl->read_single_page = vfl_vsvfl_read_single_page;
+
+	_vfl->write_single_page = vfl_vsvfl_write_single_page;
+
+	_vfl->erase_single_block = vfl_vsvfl_erase_single_block;
+
+	_vfl->write_context = vfl_vsvfl_write_context;
+	_vfl->get_ftl_ctrl_block = VFL_get_FTLCtrlBlock;
 
 	return vfl_vsvfl_open(_vfl);
 }

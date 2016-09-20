@@ -28,6 +28,12 @@
 #include <plat/regs-otg.h>
 #include <linux/i2c.h>
 #include <linux/regulator/consumer.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
+#include <linux/vmalloc.h>
+#include <linux/proc_fs.h>
+#include <asm/uaccess.h>
 #if	defined(CONFIG_USB_GADGET_S3C_OTGD_DMA_MODE) /* DMA mode */
 #define OTG_DMA_MODE		1
 
@@ -38,9 +44,9 @@
 #error " Unknown S3C OTG operation mode, Select a correct operation mode"
 #endif
 
-#undef DEBUG_S3C_UDC_SETUP
+#define DEBUG_S3C_UDC_SETUP
 #undef DEBUG_S3C_UDC_EP0
-#undef DEBUG_S3C_UDC_ISR
+#define DEBUG_S3C_UDC_ISR
 #undef DEBUG_S3C_UDC_OUT_EP
 #undef DEBUG_S3C_UDC_IN_EP
 #undef DEBUG_S3C_UDC
@@ -64,7 +70,7 @@ static char *state_names[] = {
 #endif
 
 #ifdef DEBUG_S3C_UDC_SETUP
-#define DEBUG_SETUP(fmt, args...) printk(fmt, ##args)
+#define DEBUG_SETUP(fmt, args...) pr_debug(fmt, ##args)
 #else
 #define DEBUG_SETUP(fmt, args...) do {} while (0)
 #endif
@@ -82,7 +88,7 @@ static char *state_names[] = {
 #endif
 
 #ifdef DEBUG_S3C_UDC_ISR
-#define DEBUG_ISR(fmt, args...) printk(fmt, ##args)
+#define DEBUG_ISR(fmt, args...) pr_debug(fmt, ##args)
 #else
 #define DEBUG_ISR(fmt, args...) do {} while (0)
 #endif
@@ -623,8 +629,11 @@ static void set_max_pktsize(struct s3c_udc *dev, enum usb_device_speed speed)
 	}
 
 	dev->ep[0].ep.maxpacket = ep0_fifo_size;
-	for (i = 1; i < S3C_MAX_ENDPOINTS; i++)
-		dev->ep[i].ep.maxpacket = ep_fifo_size;
+	for (i = 1; i < S3C_MAX_ENDPOINTS; i++) {
+		/* fullspeed limitations don't apply to isochronous endpoints */
+		if (dev->ep[i].bmAttributes != USB_ENDPOINT_XFER_ISOC)
+			dev->ep[i].ep.maxpacket = ep_fifo_size;
+	}
 
 	/* EP0 - Control IN (64 bytes)*/
 	ep_ctrl = readl(S3C_UDC_OTG_DIEPCTL(EP0_CON));
@@ -655,7 +664,8 @@ static int s3c_ep_enable(struct usb_ep *_ep,
 	}
 
 	/* xfer types must match, except that interrupt ~= bulk */
-	if (ep->bmAttributes != desc->bmAttributes
+	if (ep->bmAttributes !=
+			(desc->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
 	    && ep->bmAttributes != USB_ENDPOINT_XFER_BULK
 	    && desc->bmAttributes != USB_ENDPOINT_XFER_INT) {
 
@@ -1177,7 +1187,200 @@ static struct s3c_udc memory = {
 		  .ep_type = ep_bulk_in,
 		  .fifo = (unsigned int) S3C_UDC_OTG_EP14_FIFO,
 		  },
+	.ep[15] = {
+		  .ep = {
+			 .name = "ep15-iso",
+			 .ops = &s3c_ep_ops,
+			 .maxpacket = EP_FIFO_SIZE,
+			 },
+		  .dev = &memory,
+
+		  .bEndpointAddress = USB_DIR_IN | 0xf,
+		  .bmAttributes = USB_ENDPOINT_XFER_ISOC,
+
+		  .ep_type = ep_isochronous,
+		  .fifo = (unsigned int) S3C_UDC_OTG_EP15_FIFO,
+		  },
 };
+
+#if defined CONFIG_USB_S3C_OTG_HOST || defined CONFIG_USB_DWC_OTG
+atomic_t g_OtgHostMode; // actual mode: client (0) or host (1)
+atomic_t g_OtgOperationMode; // operation mode: 'c'lient, 'h'ost, 'o'tg or 'a'uto-host
+atomic_t g_OtgLastCableState; // last cable state: detached (0), client attached (1), otg attached (2)
+atomic_t g_OtgDriver; // driver to use: 0: S3C High-speed, 1: S3C Low-speed/Full-speed, 2: DWC
+
+int s3c_is_otgmode(void)
+{
+       printk("otgmode = %d\n", atomic_read(&g_OtgHostMode));
+       return atomic_read(&g_OtgHostMode);
+}
+EXPORT_SYMBOL(s3c_is_otgmode);
+
+int s3c_get_drivermode(void)
+{
+	printk("drivermode = %d\n", atomic_read(&g_OtgDriver));
+	return atomic_read(&g_OtgDriver);
+}
+EXPORT_SYMBOL(s3c_get_drivermode);
+
+void set_otghost_mode(int mode) {
+//sztupy:
+// this function will determine what to do with the new information according to the current mode of operation
+// mode: 0: cable detached, 1: client cable attached, 2: otg cable attached, -1: operation config changed
+// modes of operation: c: always client, h: always host, g: otg mode (host if otg cable), a: automatic mode (host if cable plugged in)
+
+  struct s3c_udc *dev = the_controller;
+  int enable = 0;
+   int rval;
+   char opmode = atomic_read(&g_OtgOperationMode);
+   if (mode==-1) mode = atomic_read(&g_OtgLastCableState);
+   atomic_set(&g_OtgLastCableState, mode);
+   switch (opmode) {
+     case 'h': enable = 1; break;
+     case 'o': enable = (mode==2); break;
+     case 'a': enable = (mode>0); break;
+     default: atomic_set(&g_OtgOperationMode,'c'); enable = 0; break;    
+   }
+ 
+   if (enable && !atomic_read(&g_OtgHostMode)) {
+     printk("Setting OTG host mode\n");
+     free_irq(IRQ_OTG, dev);
+     s3c_vbus_enable(&dev->gadget, 1);
+   
+#if defined CONFIG_USB_S3C_OTG_HOST && defined CONFIG_USB_DWC_OTG
+    if (atomic_read(&g_OtgDriver) & USB_OTG_DRIVER_DWC) {
+      rval = platform_driver_register(&dwc_otg_driver);
+    } else {
+      rval = platform_driver_register(&s5pc110_otg_driver);
+    }
+    if (rval < 0)
+#elif defined CONFIG_USB_DWC_OTG
+    if (platform_driver_register(&dwc_otg_driver) < 0) 
+#elif defined CONFIG_USB_S3C_OTG_HOST
+    if (platform_driver_register(&s5pc110_otg_driver) < 0) 
+#endif
+    {		
+        printk("platform_driver_register failed...\n");
+        atomic_set(&g_OtgHostMode , 0);
+    } else {
+        printk("platform_driver_registered\n");
+        atomic_set(&g_OtgHostMode , atomic_read(&g_OtgDriver)+1);
+    }
+  } else if (!enable && atomic_read(&g_OtgHostMode)) {
+// sztupy: also handle the disabling here
+    printk("Disabling OTG host mode\n");
+    s3c_vbus_enable(&dev->gadget, 0);
+#if defined CONFIG_USB_S3C_OTG_HOST && defined CONFIG_USB_DWC_OTG
+    if ((atomic_read(&g_OtgHostMode)-1) & USB_OTG_DRIVER_DWC) {
+      platform_driver_unregister(&dwc_otg_driver);
+    } else {
+      platform_driver_unregister(&s5pc110_otg_driver);
+    }
+#elif defined CONFIG_USB_S3C_OTG_HOST
+    platform_driver_unregister(&s5pc110_otg_driver);
+#elif defined CONFIG_USB_DWC_OTG
+    platform_driver_unregister(&dwc_otg_driver);
+#endif
+    printk("platform_driver_unregistered\n");
+    /* irq setup after old hardware state is cleaned up */
+    if (request_irq(IRQ_OTG, s3c_udc_irq, 0, driver_name, dev)) {
+      printk("Warning: Could not request IRQ for USB gadget!\n");
+    }
+    atomic_set(&g_OtgHostMode , 0);
+  } else {
+    printk("OTG: no changes needed\n");
+  }
+}
+
+EXPORT_SYMBOL(set_otghost_mode);
+
+static ssize_t usbmode_read(struct device *dev, struct device_attribute *attr, char *buf)
+{
+  const char *msg = "client";
+  const char *msg2 = "disconnected";
+  const char *msg3 = "gadget";
+  switch(atomic_read(&g_OtgOperationMode)) {
+  case 'o': msg = "otg"; break;
+  case 'h': msg = "host"; break;
+  case 'a': msg = "auto-host"; break;
+  }
+  switch(atomic_read(&g_OtgLastCableState)) {
+  case 1: msg2 = "usb connected"; break;
+  case 2: msg2 = "otg connected"; break;
+  }
+  switch(atomic_read(&g_OtgHostMode)) {
+  case USB_OTG_DRIVER_S3CHS: msg3 = "host (S3C/HS)"; break;
+  case USB_OTG_DRIVER_S3CFSLS: msg3 = "host (S3C/FSLS)"; break;
+  case USB_OTG_DRIVER_DWC: msg3 = "host (DWC)"; break;
+  }
+
+  return sprintf(buf,"%s (cable: %s; state: %s)\n", msg, msg2, msg3);
+}
+
+static ssize_t usbmode_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+  char c;
+  printk("input data --> %s", buf);
+  c = buf[0];
+  switch(c) {
+  case 'a': atomic_set(&g_OtgOperationMode, 'a'); set_otghost_mode(-1);break;
+  case 'h': atomic_set(&g_OtgOperationMode, 'h'); set_otghost_mode(-1);break;
+  case 'c': atomic_set(&g_OtgOperationMode, 'c'); set_otghost_mode(-1);break;
+  case 'o': atomic_set(&g_OtgOperationMode, 'o'); set_otghost_mode(-1);break;
+  default: printk("Invalid input data\n");
+  }
+  return size;
+}
+
+static ssize_t usbdriver_read(struct device *dev, struct device_attribute *attr, char *buf) {
+  const char *msg = "h:S3C driver (high-speed)";
+  switch(atomic_read(&g_OtgDriver)) {
+  case USB_OTG_DRIVER_S3CFSLS: msg = "l:S3C driver (low-speed / full-speed)";break;
+  case USB_OTG_DRIVER_DWC: msg = "d:DWC driver";break;
+  }
+  return sprintf(buf,"%s\n",msg);
+}
+
+static ssize_t usbdriver_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t size) {
+  char c;
+  printk("input data --> %s", buf);
+  c = buf[0];
+  switch(c) {
+#if defined CONFIG_USB_S3C_OTG_HOST
+  case 'h': atomic_set(&g_OtgDriver, USB_OTG_DRIVER_S3CHS); break;
+  case 'l': atomic_set(&g_OtgDriver, USB_OTG_DRIVER_S3CFSLS); break;
+#endif
+#if defined CONFIG_USB_DWC_OTG
+  case 'd': atomic_set(&g_OtgDriver, USB_OTG_DRIVER_DWC); break;
+#endif
+  default: printk("Invalid input data\n");
+  }
+  return size;
+
+}
+
+static ssize_t usbversion_read(struct device *dev, struct device_attribute *attr, char *buf) {
+  return sprintf(buf,"version: build 5\ndrivers:%s%s\n",
+#if defined CONFIG_USB_S3C_OTG_HOST
+	" S3CHS S3CFSLS"
+#else
+	""
+#endif
+	,
+#if defined CONFIG_USB_DWC_OTG
+	" DWC"
+#else
+	""
+#endif
+  );
+}
+
+// kevinh - Allow changing USB host/target modes on S3C android devices without a special cable
+static DEVICE_ATTR(opmode, S_IRUGO | S_IWUSR, usbmode_read, usbmode_write);
+// sztupy - add some more attributes
+static DEVICE_ATTR(hostdriver, S_IRUGO | S_IWUSR, usbdriver_read, usbdriver_write);
+static DEVICE_ATTR(version, S_IRUGO, usbversion_read, NULL);
+#endif
 
 /*
  * probe - binds to the platform device
@@ -1232,6 +1435,17 @@ static int s3c_udc_probe(struct platform_device *pdev)
 
 	disable_irq(IRQ_OTG);
 	create_proc_files();
+#if defined CONFIG_USB_S3C_OTG_HOST || defined CONFIG_USB_DWC_OTG
+        if (device_create_file(&pdev->dev, &dev_attr_opmode) < 0)
+                printk("Failed to create device file(%s)!\n", dev_attr_opmode.attr.name);
+        if (device_create_file(&pdev->dev, &dev_attr_hostdriver) < 0)
+                printk("Failed to create device file(%s)!\n", dev_attr_hostdriver.attr.name);
+        if (device_create_file(&pdev->dev, &dev_attr_version) < 0)
+                printk("Failed to create device file(%s)!\n", dev_attr_version.attr.name);
+#if !defined CONFIG_USB_S3C_OTG_HOST
+  	atomic_set(&g_OtgDriver, USB_OTG_DRIVER_DWC);
+#endif
+#endif
 	return retval;
 }
 

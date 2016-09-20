@@ -29,6 +29,7 @@
 #include <linux/io.h>
 #include <linux/memory.h>
 #include <linux/cpufreq.h>
+#include <linux/kthread.h>
 #include <plat/clock.h>
 #include <plat/cpu-freq.h>
 #include <plat/media.h>
@@ -113,9 +114,17 @@ static irqreturn_t s3cfb_irq_frame(int irq, void *data)
 
 	s3cfb_clear_interrupt(fbdev);
 
-	complete_all(&fbdev->fb_complete);
+	fbdev->vsync_timestamp = ktime_get();
+	wmb();
+	wake_up_interruptible(&fbdev->vsync_wait);
 
 	return IRQ_HANDLED;
+}
+static int s3cfb_vsync_timestamp_changed(struct s3cfb_global *fbdev,
+		ktime_t prev_timestamp)
+{
+	rmb();
+	return !ktime_equal(prev_timestamp, fbdev->vsync_timestamp);
 }
 static void s3cfb_set_window(struct s3cfb_global *ctrl, int id, int enable)
 {
@@ -134,7 +143,7 @@ static int s3cfb_init_global(struct s3cfb_global *ctrl)
 	ctrl->output = OUTPUT_RGB;
 	ctrl->rgb_mode = MODE_RGB_P;
 
-	init_completion(&ctrl->fb_complete);
+	init_waitqueue_head(&ctrl->vsync_wait);
 	mutex_init(&ctrl->lock);
 
 	s3cfb_set_output(ctrl);
@@ -561,18 +570,17 @@ static int s3cfb_release(struct fb_info *fb, int user)
 
 static int s3cfb_wait_for_vsync(struct s3cfb_global *ctrl)
 {
+	ktime_t prev_timestamp;
 	int ret;
 
-	dev_dbg(ctrl->dev, "waiting for VSYNC interrupt\n");
-
-	ret = wait_for_completion_interruptible_timeout(
-		&ctrl->fb_complete, msecs_to_jiffies(100));
+	prev_timestamp = ctrl->vsync_timestamp;
+	ret = wait_event_interruptible_timeout(ctrl->vsync_wait,
+			s3cfb_vsync_timestamp_changed(ctrl, prev_timestamp),
+			msecs_to_jiffies(100));
 	if (ret == 0)
 		return -ETIMEDOUT;
 	if (ret < 0)
 		return ret;
-
-	dev_dbg(ctrl->dev, "got a VSYNC interrupt\n");
 
 	return ret;
 }
@@ -598,6 +606,15 @@ static int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 	case FBIO_WAITFORVSYNC:
 		s3cfb_wait_for_vsync(fbdev);
+		break;
+
+	// Custom IOCTL added to return the VSYNC timestamp
+	case S3CFB_WAIT_FOR_VSYNC:
+		ret = s3cfb_wait_for_vsync(fbdev);
+		if(ret > 0) {
+			u64 nsecs = ktime_to_ns(fbdev->vsync_timestamp);
+			copy_to_user((void*)arg, &nsecs, sizeof(u64));
+		}
 		break;
 
 	case S3CFB_WIN_POSITION:

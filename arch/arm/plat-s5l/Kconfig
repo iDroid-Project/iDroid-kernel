@@ -25,3 +25,8 @@ config PLAT_S5L
 config S5L_IRQ
 	bool
 	depends on PLAT_S5L
+
+config S5L_EXT_INT
+	bool
+	help
+	  Use the external interrupts (other than GPIO interrupts.)

@@ -1,4 +1,5 @@
 /**
+ * Copyright (c) 2016 Erfan Abdi.
  * Copyright (c) 2011 Richard Ian Taylor.
  *
  * This file is part of the iDroid Project. (http://www.idroidproject.org).
@@ -80,6 +81,7 @@ static struct h2fmi_smth h2fmi_smth_atv2g = { { 0, 0, 0, 3, 3, 3, 4, 0 }, { 0x33
 static struct apple_vfl vfl = {
 	.max_devices = 2,
 };
+static struct apple_ftl ftl;
 
 static struct h2fmi_platform_data pdata0 = {
 	.ecc_step_shift = 10,
@@ -114,7 +116,7 @@ static struct platform_device h2fmi0 = {
 
 	.dev = {
 		.platform_data = &pdata0,
-		.coherent_dma_mask = DMA_32BIT_MASK,
+		.coherent_dma_mask = DMA_BIT_MASK(32),
 	},
 };
 
@@ -127,7 +129,7 @@ static struct platform_device h2fmi1 = {
 
 	.dev = {
 		.platform_data = &pdata1,
-		.coherent_dma_mask = DMA_32BIT_MASK,
+		.coherent_dma_mask = DMA_BIT_MASK(32),
 	},
 };
 
@@ -177,12 +179,24 @@ int s5l8930_register_h2fmi(void)
 	if(ret)
 		return ret;
 
+
 	return 0;
 }
 
 int register_vfl(void)
 {
+	int ret = 0;
 	wait_for_device_probe();
-	return apple_vfl_register(&vfl, APPLE_VFL_NEW_STYLE);
+	ret = apple_vfl_register(&vfl, APPLE_VFL_NEW_STYLE);
+	if (ret)
+		return ret;
+
+	ret = apple_ftl_register(&ftl,&vfl);
+	if (ret)
+		return ret;
+	get_encryption_keys(&vfl);
+	ret = iphone_block();	//TODO
+	return ret;
 }
 late_initcall(register_vfl);
+

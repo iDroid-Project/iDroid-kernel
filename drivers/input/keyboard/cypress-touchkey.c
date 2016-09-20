@@ -1,6 +1,7 @@
 /*
  * Copyright 2006-2010, Cypress Semiconductor Corporation.
  * Copyright (C) 2010, Samsung Electronics Co. Ltd. All Rights Reserved.
+ * Copyright 2011, Michael Richter (alias neldar)
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,6 +29,11 @@
 #include <linux/earlysuspend.h>
 #include <linux/input/cypress-touchkey.h>
 #include <linux/firmware.h>
+#include <linux/bln.h>
+#include <linux/touchkey.h>
+
+#include <linux/device.h>
+#include <linux/miscdevice.h>
 
 #define SCANCODE_MASK		0x07
 #define UPDOWN_EVENT_MASK	0x08
@@ -54,6 +60,9 @@ struct cypress_touchkey_devdata {
 	bool is_powering_on;
 	bool has_legacy_keycode;
 };
+
+static struct cypress_touchkey_devdata *blndevdata;
+static int touchkey_backlight_enabled = 0;
 
 static int i2c_touchkey_read_byte(struct cypress_touchkey_devdata *devdata,
 					u8 *val)
@@ -180,6 +189,8 @@ static irqreturn_t touchkey_interrupt_thread(int irq, void *touchkey_devdata)
 	}
 
 	input_sync(devdata->input_dev);
+
+	touchkey_backlight_enabled = 1;
 err:
 	return IRQ_HANDLED;
 }
@@ -209,9 +220,46 @@ static void cypress_touchkey_early_suspend(struct early_suspend *h)
 		return;
 
 	disable_irq(devdata->client->irq);
+
+#ifdef CONFIG_GENERIC_BLN
+	/*
+	 * Disallow powering off the touchkey controller
+	 * while a led notification is ongoing
+	 */
+	if(!bln_is_ongoing()) {
+		devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
+		devdata->pdata->touchkey_sleep_onoff(TOUCHKEY_OFF);
+	}
+#endif
 	devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
 
 	all_keys_up(devdata);
+
+	touchkey_backlight_enabled = 0;
+}
+
+static int cypress_touchkey_backlight_enable(struct cypress_touchkey_devdata *devdata)
+{
+	int ret = 0;
+	if (touchkey_backlight_enabled == 0) {
+		ret = i2c_touchkey_write_byte(devdata, devdata->backlight_on);
+		if (!ret) {
+			touchkey_backlight_enabled = 1;
+		}
+	}
+	return ret;
+}
+
+static int cypress_touchkey_backlight_disable(struct cypress_touchkey_devdata *devdata)
+{
+	int ret = 0;
+	if (touchkey_backlight_enabled == 1) {
+		ret = i2c_touchkey_write_byte(devdata, devdata->backlight_off);
+		if (!ret) {
+			touchkey_backlight_enabled = 0;
+		}
+	}
+	return ret;
 }
 
 static void cypress_touchkey_early_resume(struct early_suspend *h)
@@ -220,7 +268,7 @@ static void cypress_touchkey_early_resume(struct early_suspend *h)
 		container_of(h, struct cypress_touchkey_devdata, early_suspend);
 
 	devdata->pdata->touchkey_onoff(TOUCHKEY_ON);
-	if (i2c_touchkey_write_byte(devdata, devdata->backlight_on)) {
+	if (cypress_touchkey_backlight_enable(devdata)) {
 		devdata->is_dead = true;
 		devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
 		dev_err(&devdata->client->dev, "%s: touch keypad not responding"
@@ -318,7 +366,7 @@ static int cypress_touchkey_open(struct input_dev *input_dev)
 	devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
 	devdata->pdata->touchkey_onoff(TOUCHKEY_ON);
 
-	ret = i2c_touchkey_write_byte(devdata, devdata->backlight_on);
+	ret = cypress_touchkey_backlight_enable(devdata);
 	if (ret) {
 		dev_err(dev, "%s: touch keypad backlight on failed\n",
 				__func__);
@@ -329,6 +377,77 @@ done:
 	input_dev->open = NULL;
 	return 0;
 }
+
+static void cypress_touchkey_enable_led_notification(void){
+	/* is_powering_on signals whether touchkey lights are used for touchmode */
+	if (blndevdata->is_powering_on){
+		/* reconfigure gpio for sleep mode */
+		blndevdata->pdata->touchkey_sleep_onoff(TOUCHKEY_ON);
+
+		/*
+		 * power on the touchkey controller
+		 * This is actually not needed, but it is intentionally
+		 * left for the case that the early_resume() function
+		 * did not power on the touchkey controller for some reasons
+		 */
+		blndevdata->pdata->touchkey_onoff(TOUCHKEY_ON);
+
+		/* write to i2cbus, enable backlights */
+		cypress_touchkey_backlight_enable(blndevdata);
+	}
+	else
+		pr_info("%s: cannot set notification led, touchkeys are enabled\n",__FUNCTION__);
+}
+
+static void cypress_touchkey_disable_led_notification(void){
+	/*
+	 * reconfigure gpio for sleep mode, this has to be done
+	 * independently from the power status
+	 */
+	blndevdata->pdata->touchkey_sleep_onoff(TOUCHKEY_OFF);
+
+	/* if touchkeys lights are not used for touchmode */
+	if (blndevdata->is_powering_on){
+		cypress_touchkey_backlight_disable(blndevdata);
+
+		#if 0
+		/*
+		 * power off the touchkey controller
+		 * This is actually not needed, the early_suspend function
+		 * should take care of powering off the touchkey controller
+		 */
+		blndevdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
+		#endif
+	}
+}
+
+static struct bln_implementation cypress_touchkey_bln = {
+	.enable = cypress_touchkey_enable_led_notification,
+	.disable = cypress_touchkey_disable_led_notification,
+};
+
+
+static int cypress_touchkey_status_backlight(void) {
+	return touchkey_backlight_enabled;
+}
+
+static void cypress_touchkey_enable_backlight(void) {
+	if (!blndevdata->is_powering_on) {
+		cypress_touchkey_backlight_enable(blndevdata);
+	}
+}
+
+static void cypress_touchkey_disable_backlight(void) {
+	if (!blndevdata->is_powering_on) {
+		cypress_touchkey_backlight_disable(blndevdata);
+	}
+}
+
+static struct touchkey_implementation cypress_touchkey_touchkey = {
+	.enable = cypress_touchkey_enable_backlight,
+	.disable = cypress_touchkey_disable_backlight,
+	.status = cypress_touchkey_status_backlight,
+};
 
 static int cypress_touchkey_probe(struct i2c_client *client,
 		const struct i2c_device_id *id)
@@ -402,7 +521,7 @@ static int cypress_touchkey_probe(struct i2c_client *client,
 
 	set_device_params(devdata, data);
 
-	err = i2c_touchkey_write_byte(devdata, devdata->backlight_on);
+	err = cypress_touchkey_backlight_enable(devdata);
 	if (err) {
 		dev_err(dev, "%s: touch keypad backlight on failed\n",
 				__func__);
@@ -429,7 +548,15 @@ static int cypress_touchkey_probe(struct i2c_client *client,
 
 	devdata->is_powering_on = false;
 
+#ifdef CONFIG_GENERIC_BLN
+	blndevdata = devdata;
+	register_bln_implementation(&cypress_touchkey_bln);
+#endif
+
+	register_touchkey_implementation(&cypress_touchkey_touchkey);
+
 	return 0;
+
 
 err_req_irq:
 err_backlight_on:
